@@ -1,0 +1,112 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TorPC - Anonymous Ethereum RPC</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1>🧅 TorPC</h1>
+            <p>Anonymous Ethereum RPC Access via Tor</p>
+        </header>
+
+        <section class="info-section">
+            <h2>Connection Information</h2>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="label">RPC Endpoint:</span>
+                    <code class="endpoint" id="rpc-endpoint">/rpc</code>
+                </div>
+                <div class="info-item">
+                    <span class="label">Flashbots Endpoint:</span>
+                    <code class="endpoint" id="flashbots-endpoint">/rpc/flashbots</code>
+                </div>
+                <div class="info-item">
+                    <span class="label">Status:</span>
+                    <span id="status" class="status-unknown">Checking...</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="test-section">
+            <h2>Test RPC Connection</h2>
+            
+            <div class="method-selector">
+                <label for="method">Method:</label>
+                <select id="method">
+                    <option value="eth_blockNumber">eth_blockNumber</option>
+                    <option value="eth_chainId">eth_chainId</option>
+                    <option value="net_version">net_version</option>
+                    <option value="eth_gasPrice">eth_gasPrice</option>
+                    <option value="eth_getBalance">eth_getBalance</option>
+                    <option value="eth_accounts">eth_accounts (blocked)</option>
+                </select>
+            </div>
+
+            <div class="params-input" id="params-section" style="display: none;">
+                <label for="params">Parameters (JSON):</label>
+                <input type="text" id="params" placeholder='["0x..."]'>
+            </div>
+
+            <div class="endpoint-selector">
+                <label>
+                    <input type="radio" name="endpoint" value="/rpc" checked>
+                    Standard RPC
+                </label>
+                <label>
+                    <input type="radio" name="endpoint" value="/rpc/flashbots">
+                    Flashbots
+                </label>
+            </div>
+
+            <button id="test-btn" class="btn">Send Request</button>
+
+            <div class="results">
+                <h3>Request:</h3>
+                <pre id="request-display" class="code-block"></pre>
+                
+                <h3>Response:</h3>
+                <pre id="response-display" class="code-block"></pre>
+            </div>
+        </section>
+
+        <section class="usage-section">
+            <h2>Usage Examples</h2>
+            
+            <div class="example">
+                <h3>MetaMask Configuration</h3>
+                <p>Add a custom RPC network with:</p>
+                <ul>
+                    <li>Network Name: <code>TorPC</code></li>
+                    <li>RPC URL: <code id="full-rpc-url">http://localhost:8080/rpc</code></li>
+                    <li>Chain ID: <code>1337</code> (for dev mode)</li>
+                    <li>Currency Symbol: <code>ETH</code></li>
+                </ul>
+            </div>
+
+            <div class="example">
+                <h3>cURL Example</h3>
+                <pre class="code-block">curl -X POST http://localhost:8080/rpc \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'</pre>
+            </div>
+
+            <div class="example">
+                <h3>Through Tor</h3>
+                <p>If Tor is running, your onion address will be displayed below:</p>
+                <pre class="code-block" id="tor-info">Checking Tor status...</pre>
+            </div>
+        </section>
+
+        <footer>
+            <p>TorPC - Privacy-focused Ethereum RPC proxy</p>
+            <p>⚠️ For development and testing only</p>
+        </footer>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

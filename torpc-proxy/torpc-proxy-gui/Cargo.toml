@@ -1,0 +1,41 @@
+[package]
+name = "torpc-proxy-gui"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+description = "Desktop GUI for ToRPC proxy using Tauri"
+
+[build-dependencies]
+tauri-build = { version = "1", features = [] }
+
+[dependencies]
+# Core library
+torpc-proxy-core = { path = "../torpc-proxy-core" }
+
+# Tauri
+tauri = { version = "1", features = ["shell-open", "system-tray", "window-close", "window-hide", "window-minimize", "window-set-focus", "window-show"] }
+
+# Async runtime
+tokio = { workspace = true }
+
+# Error handling
+anyhow = { workspace = true }
+
+# Logging
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+
+# Serialization
+serde = { workspace = true }
+serde_json = { workspace = true }
+
+# Tor support for connection testing
+tokio-socks = { workspace = true }
+
+# Platform-specific directories for config storage
+dirs = "5.0"
+
+[features]
+# This feature is used for production builds or when `devPath` points to the filesystem
+custom-protocol = ["tauri/custom-protocol"]

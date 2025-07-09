@@ -1,0 +1,32 @@
+# Rust
+target/
+Cargo.lock
+**/*.rs.bk
+*.pdb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+proxy.log
+
+# Config files with sensitive data
+torpc-proxy.toml
+!torpc-proxy.example.toml
+
+# Tauri
+torpc-proxy-gui/target/
+torpc-proxy-gui/WixTools/
+
+# Test artifacts
+test-output/
+*.test

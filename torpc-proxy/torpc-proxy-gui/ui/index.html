@@ -1,0 +1,89 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ToRPC Proxy Settings</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <h1>ToRPC Proxy Settings</h1>
+        
+        <div class="status-section">
+            <h2>Proxy Status</h2>
+            <div class="status-indicator">
+                <span class="status-dot" id="statusDot"></span>
+                <span class="status-text" id="statusText">Checking...</span>
+            </div>
+            <div class="proxy-info" id="proxyInfo" style="display: none;">
+                <p><strong>Proxy URL:</strong> <code id="proxyUrl">http://localhost:8545</code></p>
+                <div class="wallet-instructions">
+                    <p><strong>Wallet Configuration:</strong></p>
+                    <ul>
+                        <li>Network Name: <code>ToRPC Proxy</code></li>
+                        <li>RPC URL: <code id="walletRpcUrl">http://localhost:8545</code></li>
+                        <li>Chain ID: <code>1337</code> (for dev) or <code>1</code> (for mainnet)</li>
+                        <li>Currency Symbol: <code>ETH</code></li>
+                    </ul>
+                </div>
+            </div>
+            <div class="control-buttons">
+                <button type="button" class="btn btn-success" id="startBtn">Start Proxy</button>
+                <button type="button" class="btn btn-danger" id="stopBtn" style="display: none;">Stop Proxy</button>
+            </div>
+        </div>
+
+        <form id="configForm">
+            <div class="form-group">
+                <label for="onionEndpoint">Onion Endpoint</label>
+                <input 
+                    type="text" 
+                    id="onionEndpoint" 
+                    name="onionEndpoint" 
+                    placeholder="example.onion:80"
+                    title="Enter your .onion address with port (e.g., pxglb4naobvtpmnnvmsqmqgmfougct7en7xfqdevao6nrkmgmgrzopid.onion:80)"
+                    required
+                >
+                <small>The .onion address of your ToRPC server</small>
+            </div>
+
+            <div class="form-group">
+                <label for="listenPort">Listen Port</label>
+                <input 
+                    type="number" 
+                    id="listenPort" 
+                    name="listenPort" 
+                    value="8545"
+                    min="1024"
+                    max="65535"
+                    required
+                >
+                <small>Local port for wallet connections</small>
+            </div>
+
+            <div class="form-group">
+                <label for="torProxy">Tor SOCKS5 Proxy</label>
+                <input 
+                    type="text" 
+                    id="torProxy" 
+                    name="torProxy" 
+                    value="127.0.0.1:9050"
+                    required
+                >
+                <small>Tor SOCKS5 proxy address</small>
+            </div>
+
+            <div class="button-group">
+                <button type="submit" class="btn btn-primary">Save Settings</button>
+                <button type="button" class="btn btn-secondary" id="testBtn">Test Connection</button>
+                <button type="button" class="btn btn-secondary" id="closeBtn">Close</button>
+            </div>
+        </form>
+
+        <div class="message" id="message"></div>
+    </div>
+
+    <script src="app.js"></script>
+</body>
+</html>

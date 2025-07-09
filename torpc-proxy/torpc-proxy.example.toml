@@ -1,0 +1,16 @@
+# ToRPC Proxy Configuration Example
+# Copy this file to torpc-proxy.toml and modify as needed
+
+# Port for wallet connections (default: 8545)
+port = 9000
+
+# Tor SOCKS5 proxy settings
+tor_proxy_host = "127.0.0.1"
+tor_proxy_port = 9050
+
+# Your .onion RPC endpoint
+# Replace with your actual onion address
+onion_endpoint = "pxglb4naobvtpmnnvmsqmqgmfougct7en7xfqdevao6nrkmgmgrzopid.onion:80"
+
+# Logging level (trace, debug, info, warn, error)
+log_level = "trace"
