@@ -116,7 +116,8 @@ else
     if [ "$DEBUG_MODE" = true ]; then
         # In debug mode, show Geth output briefly
         debug_log "Starting Geth with debug output..."
-        timeout 5s ./scripts/start-geth-dev.sh &
+        # Note: timeout command not available on macOS by default
+        ./scripts/start-geth-dev.sh &
     else
         ./scripts/start-geth-dev.sh &
     fi
@@ -126,7 +127,7 @@ else
     
     # Wait for Geth to be ready
     debug_log "Waiting for Geth RPC to become available..."
-    wait_for_service "Geth" "curl -s -X POST -H 'Content-Type: application/json' --data '{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}' http://127.0.0.1:8545"
+    wait_for_service "Geth" "curl -s -X POST -H 'Content-Type: application/json' --data '{\\\"jsonrpc\\\":\\\"2.0\\\",\\\"method\\\":\\\"eth_blockNumber\\\",\\\"params\\\":[],\\\"id\\\":1}' http://127.0.0.1:8545"
     
     if [ $? -eq 0 ]; then
         echo -e "  ${GREEN}✓ Geth started successfully (PID: $GETH_PID)${NC}"
@@ -232,6 +233,8 @@ if is_running "target/release/torpc"; then
     echo -e "  ${GREEN}✓ TorPC is already running${NC}"
 else
     echo "  Starting TorPC..."
+    # Ensure log directory exists
+    mkdir -p data
     # For development, use local Geth as flashbots endpoint to avoid authentication issues
     RUST_LOG=info FLASHBOTS_URL="http://127.0.0.1:8545" nohup ./target/release/torpc > data/torpc.log 2>&1 &
     TORPC_PID=$!

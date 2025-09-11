@@ -3,11 +3,11 @@ use bytes::{Bytes, BytesMut};
 use http_body_util::{BodyExt, Full};
 use hyper::body::Incoming;
 use hyper::service::service_fn;
-use hyper::{Request, Response};
+use hyper::{Request, Response, StatusCode, Method};
 use hyper_util::rt::TokioIo;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpListener;
 use tokio_socks::tcp::Socks5Stream;
 use tracing::{debug, error, info, trace};
@@ -32,6 +32,9 @@ impl TorRpcProxy {
 
     /// Start the proxy server
     pub async fn run(&self) -> Result<()> {
+        // Start discovery server
+        let _discovery_handle = self.start_discovery_server();
+        
         let listener = TcpListener::bind(self.config.listen_addr)
             .await
             .with_context(|| format!("Failed to bind to address {}", self.config.listen_addr))?;
@@ -52,6 +55,47 @@ impl TorRpcProxy {
                 }
             });
         }
+    }
+    
+    /// Start the discovery HTTP server on port 8081
+    fn start_discovery_server(&self) -> tokio::task::JoinHandle<()> {
+        let config = Arc::clone(&self.config);
+        let discovery_port = std::env::var("TORPC_DISCOVERY_PORT")
+            .ok()
+            .and_then(|p| p.parse().ok())
+            .unwrap_or(8081);
+        
+        tokio::spawn(async move {
+            let discovery_addr: SocketAddr = ([127, 0, 0, 1], discovery_port).into();
+            
+            let listener = match TcpListener::bind(discovery_addr).await {
+                Ok(listener) => {
+                    info!("Discovery API listening on http://{}", discovery_addr);
+                    listener
+                }
+                Err(e) => {
+                    error!("Failed to start discovery server on port {}: {}", discovery_port, e);
+                    return;
+                }
+            };
+            
+            loop {
+                let (stream, _) = match listener.accept().await {
+                    Ok(conn) => conn,
+                    Err(e) => {
+                        error!("Discovery server accept error: {}", e);
+                        continue;
+                    }
+                };
+                
+                let config = Arc::clone(&config);
+                tokio::spawn(async move {
+                    if let Err(e) = handle_discovery_request(stream, config).await {
+                        debug!("Error handling discovery request: {}", e);
+                    }
+                });
+            }
+        })
     }
 }
 
@@ -289,6 +333,70 @@ async fn proxy_request(
         .header("Content-Type", "application/json")
         .body(Full::new(Bytes::from(body.to_vec())))
         .unwrap())
+}
+
+/// Handle discovery API requests
+async fn handle_discovery_request(
+    stream: tokio::net::TcpStream,
+    config: Arc<ProxyConfig>,
+) -> Result<()> {
+    let io = TokioIo::new(stream);
+    
+    let service = service_fn(|req: Request<Incoming>| {
+        let config = Arc::clone(&config);
+        async move {
+            // Only handle GET /api/discovery
+            if req.method() == Method::GET && req.uri().path() == "/api/discovery" {
+                let response_body = serde_json::json!({
+                    "status": "running",
+                    "proxy": {
+                        "listen_addr": config.listen_addr.to_string(),
+                        "rpc_endpoint": "",
+                        "version": env!("CARGO_PKG_VERSION"),
+                    },
+                    "suggested_rpc_url": format!("http://{}", config.listen_addr),
+                });
+                
+                let response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Content-Type", "application/json")
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Access-Control-Allow-Methods", "GET, OPTIONS")
+                    .header("Access-Control-Allow-Headers", "Content-Type")
+                    .header("Content-Security-Policy", "default-src 'self'; connect-src 'self' http://localhost:* ws://localhost:* wss://localhost:*")
+                    .body(Full::new(Bytes::from(response_body.to_string())))
+                    .unwrap();
+                
+                Ok::<_, anyhow::Error>(response)
+            } else if req.method() == Method::OPTIONS {
+                // Handle CORS preflight
+                let response = Response::builder()
+                    .status(StatusCode::OK)
+                    .header("Access-Control-Allow-Origin", "*")
+                    .header("Access-Control-Allow-Methods", "GET, OPTIONS")
+                    .header("Access-Control-Allow-Headers", "Content-Type")
+                    .header("Content-Security-Policy", "default-src 'self'; connect-src 'self' http://localhost:* ws://localhost:* wss://localhost:*")
+                    .body(Full::new(Bytes::new()))
+                    .unwrap();
+                
+                Ok(response)
+            } else {
+                let response = Response::builder()
+                    .status(StatusCode::NOT_FOUND)
+                    .header("Content-Security-Policy", "default-src 'self'; connect-src 'self' http://localhost:* ws://localhost:* wss://localhost:*")
+                    .body(Full::new(Bytes::from("Not Found")))
+                    .unwrap();
+                
+                Ok(response)
+            }
+        }
+    });
+    
+    let _ = hyper_util::server::conn::auto::Builder::new(hyper_util::rt::TokioExecutor::new())
+        .serve_connection(io, service)
+        .await;
+    
+    Ok(())
 }
 
 #[cfg(test)]

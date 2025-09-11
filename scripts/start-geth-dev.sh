@@ -4,8 +4,8 @@
 # Create data directory if it doesn't exist
 mkdir -p data/geth-dev
 
-# Start Geth in dev mode with instant mining
-echo "Starting Geth in development mode..."
+# Start Geth in dev mode with 12-second block time (simulating mainnet)
+echo "Starting Geth in development mode with 12-second blocks..."
 geth \
     --dev \
     --http \
@@ -19,7 +19,7 @@ geth \
     --ws.port 8546 \
     --ws.api eth,net,web3,miner,txpool,debug,admin \
     --datadir ./data/geth-dev \
-    --dev.period 1 \
+    --dev.period 12 \
     --nodiscover \
     --maxpeers 0 \
     --verbosity 3 \
