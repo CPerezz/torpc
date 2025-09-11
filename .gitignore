@@ -5,6 +5,7 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 dev-debug.log
+prd.txt
 
 # Dependency directories
 node_modules/
@@ -20,6 +21,8 @@ node_modules/
 *.njsproj
 *.sln
 *.sw?
+.taskmaster
+cache/
 
 # OS specific
 .DS_Store
@@ -39,6 +42,8 @@ Cargo.lock
 # Tor specific
 *.onion
 /configs/torrc.local
+/configs/
+/output/
 
 # Test artifacts
 tarpaulin-report.html
