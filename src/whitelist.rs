@@ -31,6 +31,7 @@ static ALLOWED_METHODS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     methods.insert("eth_gasPrice");
     methods.insert("eth_feeHistory");
     methods.insert("eth_maxPriorityFeePerGas");
+    methods.insert("eth_getLogs");
     
     // Network info
     methods.insert("net_version");
