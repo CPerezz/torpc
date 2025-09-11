@@ -242,3 +242,270 @@ footer {
 @keyframes spin {
     to { transform: rotate(360deg); }
 }
+
+/* MetaMask Section */
+.metamask-section {
+    background: var(--bg-light);
+}
+
+.metamask-container {
+    margin-top: 20px;
+}
+
+.btn-metamask {
+    background: #f6851b;
+    margin-bottom: 20px;
+}
+
+.btn-metamask:hover {
+    background: #e2761b;
+}
+
+.metamask-status {
+    background: var(--bg-dark);
+    padding: 20px;
+    border-radius: 8px;
+    margin-top: 20px;
+}
+
+.status-message {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-bottom: 15px;
+}
+
+.spinner {
+    display: inline-block;
+    width: 16px;
+    height: 16px;
+    border: 2px solid var(--bg-light);
+    border-radius: 50%;
+    border-top-color: var(--accent);
+    animation: spin 0.8s ease-in-out infinite;
+}
+
+.rpc-info {
+    margin-top: 15px;
+}
+
+.rpc-url-container {
+    display: flex;
+    gap: 10px;
+    margin-top: 5px;
+}
+
+.rpc-url-container input {
+    flex: 1;
+    font-family: monospace;
+}
+
+.btn-copy {
+    background: var(--bg-light);
+    padding: 10px 20px;
+    font-size: 14px;
+}
+
+.btn-copy:hover {
+    background: #444;
+}
+
+.btn-copy.copied {
+    background: var(--success);
+}
+
+.instructions {
+    margin-top: 20px;
+    padding: 15px;
+    background: rgba(155, 89, 182, 0.1);
+    border-radius: 4px;
+    border: 1px solid rgba(155, 89, 182, 0.3);
+}
+
+.instructions ol {
+    margin-left: 20px;
+}
+
+.instructions li {
+    margin: 8px 0;
+    color: var(--text-primary);
+}
+
+/* Trust Wallet Styles */
+.trustwallet-section {
+    background: var(--bg-light);
+}
+
+.trustwallet-container {
+    margin-top: 20px;
+}
+
+.btn-trustwallet {
+    background: #3375BB;
+    margin-bottom: 20px;
+}
+
+.btn-trustwallet:hover {
+    background: #2563A8;
+}
+
+.trustwallet-status {
+    background: var(--bg-dark);
+    padding: 20px;
+    border-radius: 8px;
+    margin-top: 20px;
+}
+
+
+.btn-deeplink {
+    background: var(--accent);
+    display: block;
+    width: fit-content;
+    margin: 20px auto;
+    text-decoration: none;
+    text-align: center;
+}
+
+.btn-deeplink:hover {
+    background: #8e44ad;
+    transform: translateY(-2px);
+}
+
+.instructions h4 {
+    color: var(--accent);
+    margin-top: 20px;
+    margin-bottom: 10px;
+}
+
+.instructions ul {
+    margin-left: 40px;
+    margin-top: 10px;
+}
+
+.instructions ul li {
+    margin: 5px 0;
+    color: var(--text-secondary);
+}
+
+/* Coinbase Wallet Styles */
+.coinbase-section {
+    background: var(--bg-light);
+}
+
+.coinbase-container {
+    margin-top: 20px;
+}
+
+.btn-coinbase {
+    background: #0052FF;
+    margin-bottom: 20px;
+}
+
+.btn-coinbase:hover {
+    background: #0040CC;
+}
+
+.coinbase-status {
+    background: var(--bg-dark);
+    padding: 20px;
+    border-radius: 8px;
+    margin-top: 20px;
+}
+
+.input-group {
+    display: flex;
+    gap: 10px;
+    margin-top: 5px;
+}
+
+.rpc-url-input {
+    flex: 1;
+    font-family: monospace;
+}
+
+.btn-small {
+    background: var(--bg-light);
+    padding: 10px 20px;
+    font-size: 14px;
+}
+
+.btn-small:hover {
+    background: #444;
+}
+
+.btn-small.copied {
+    background: var(--success);
+}
+
+.btn-primary {
+    background: #0052FF;
+    display: block;
+    width: fit-content;
+    margin: 20px auto 10px;
+    text-decoration: none;
+    text-align: center;
+}
+
+.btn-primary:hover {
+    background: #0040CC;
+    transform: translateY(-2px);
+}
+
+.btn-primary.success {
+    background: var(--success);
+}
+
+.btn-primary.error {
+    background: var(--error);
+}
+
+/* Rainbow Wallet Styles */
+.rainbow-section {
+    background: var(--bg-light);
+}
+
+.rainbow-container {
+    margin-top: 20px;
+}
+
+.btn-rainbow {
+    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+    margin-bottom: 20px;
+}
+
+.btn-rainbow:hover {
+    background: linear-gradient(135deg, #5a67d8 0%, #68419d 100%);
+}
+
+.rainbow-status {
+    background: var(--bg-dark);
+    padding: 20px;
+    border-radius: 8px;
+    margin-top: 20px;
+}
+
+/* Rabby Wallet Styles */
+.rabby-section {
+    background: var(--bg-light);
+}
+
+.rabby-container {
+    margin-top: 20px;
+}
+
+.btn-rabby {
+    background: #7084f5;
+    margin-bottom: 20px;
+}
+
+.btn-rabby:hover {
+    background: #5a6fe8;
+}
+
+.rabby-status {
+    background: var(--bg-dark);
+    padding: 20px;
+    border-radius: 8px;
+    margin-top: 20px;
+}
+

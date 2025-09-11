@@ -31,6 +31,187 @@
             </div>
         </section>
 
+        <section class="metamask-section">
+            <h2>Quick Wallet Setup</h2>
+            <div class="metamask-container">
+                <button id="add-to-metamask" class="btn btn-metamask">
+                    🦊 Add to MetaMask
+                </button>
+                <div id="metamask-status" class="metamask-status" style="display: none;">
+                    <div class="status-message">
+                        <span class="spinner"></span>
+                        <span id="status-text">Detecting ToRPC proxy client...</span>
+                    </div>
+                    <div id="rpc-info" class="rpc-info" style="display: none;">
+                        <label>RPC URL:</label>
+                        <div class="rpc-url-container">
+                            <input type="text" id="rpc-url" readonly>
+                            <button id="copy-btn" class="btn btn-copy">Copy</button>
+                        </div>
+                    </div>
+                    <div id="instructions" class="instructions" style="display: none;">
+                        <ol>
+                            <li>Copy the RPC URL above</li>
+                            <li>Open MetaMask → Settings → Networks</li>
+                            <li>Click "Ethereum Mainnet" to edit</li>
+                            <li>Add the copied URL as a new RPC URL</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="trustwallet-section">
+            <h2>Trust Wallet Setup</h2>
+            <div class="trustwallet-container">
+                <button id="add-to-trustwallet" class="btn btn-trustwallet">
+                    🛡️ Setup Trust Wallet
+                </button>
+                <div id="trustwallet-status" class="trustwallet-status" style="display: none;">
+                    <div class="status-message">
+                        <span class="spinner"></span>
+                        <span id="trust-status-text">Detecting ToRPC proxy client...</span>
+                    </div>
+                    <div id="trust-rpc-info" class="rpc-info" style="display: none;">
+                        <label>RPC URL for Trust Wallet:</label>
+                        <div class="input-group">
+                            <input type="text" id="trust-rpc-url" readonly class="rpc-url-input">
+                            <button id="trust-copy-btn" class="btn btn-small">Copy</button>
+                        </div>
+                    </div>
+                    <a id="trust-deeplink-btn" class="btn btn-deeplink" style="display: none;" target="_blank">
+                        📱 Open in Trust Wallet
+                    </a>
+                    <div id="trust-instructions" class="instructions" style="display: none;">
+                        <h4>Manual Setup:</h4>
+                        <ol>
+                            <li>Copy the RPC URL above</li>
+                            <li>Open Trust Wallet → Settings → Networks</li>
+                            <li>Tap "+" to add a custom network</li>
+                            <li>Enter:
+                                <ul>
+                                    <li>Network Name: <code>ToRPC Privacy Network</code></li>
+                                    <li>RPC URL: <em>(paste the copied URL)</em></li>
+                                    <li>Chain ID: <code>1</code> (mainnet) or <code>1337</code> (dev)</li>
+                                    <li>Symbol: <code>ETH</code></li>
+                                </ul>
+                            </li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="coinbase-section">
+            <h2>Coinbase Wallet Setup</h2>
+            <div class="coinbase-container">
+                <button id="add-to-coinbase" class="btn btn-coinbase">
+                    🔵 Setup Coinbase Wallet
+                </button>
+                <div id="coinbase-status" class="coinbase-status" style="display: none;">
+                    <div class="status-message">
+                        <span class="spinner"></span>
+                        <span id="coinbase-status-text">Detecting ToRPC proxy client...</span>
+                    </div>
+                    <div id="coinbase-rpc-info" class="rpc-info" style="display: none;">
+                        <label>RPC URL for Coinbase Wallet:</label>
+                        <div class="input-group">
+                            <input type="text" id="coinbase-rpc-url" readonly class="rpc-url-input">
+                            <button id="coinbase-copy-btn" class="btn btn-small">Copy</button>
+                        </div>
+                    </div>
+                    <button id="coinbase-add-network-btn" class="btn btn-primary" style="display: none;">
+                        Add to Coinbase Wallet Extension
+                    </button>
+                    <div id="coinbase-instructions" class="instructions" style="display: none;">
+                        <h4>Setup Instructions:</h4>
+                        <ol>
+                            <li>Click "Add to Coinbase Wallet Extension" above</li>
+                            <li>Approve the network addition in the popup</li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="rainbow-section">
+            <h2>Rainbow Wallet Setup</h2>
+            <div class="rainbow-container">
+                <button id="add-to-rainbow" class="btn btn-rainbow">
+                    🌈 Setup Rainbow Wallet
+                </button>
+                <div id="rainbow-status" class="rainbow-status" style="display: none;">
+                    <div class="status-message">
+                        <span class="spinner"></span>
+                        <span id="rainbow-status-text">Detecting ToRPC proxy client...</span>
+                    </div>
+                    <div id="rainbow-rpc-info" class="rpc-info" style="display: none;">
+                        <label>RPC URL for Rainbow:</label>
+                        <div class="input-group">
+                            <input type="text" id="rainbow-rpc-url" readonly class="rpc-url-input">
+                            <button id="rainbow-copy-btn" class="btn btn-small">Copy</button>
+                        </div>
+                    </div>
+                    <div id="rainbow-instructions" class="instructions" style="display: none;">
+                        <h4>Manual Setup:</h4>
+                        <ol>
+                            <li>Copy the RPC URL above</li>
+                            <li>In your dApp that uses RainbowKit, configure the custom network</li>
+                            <li>Use the following network configuration:
+                                <ul>
+                                    <li>Network Name: <code>ToRPC Privacy Network</code></li>
+                                    <li>RPC URL: <em>(paste the copied URL)</em></li>
+                                    <li>Chain ID: <code>1</code> (mainnet) or <code>1337</code> (dev)</li>
+                                    <li>Symbol: <code>ETH</code></li>
+                                </ul>
+                            </li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <section class="rabby-section">
+            <h2>Rabby Wallet Setup</h2>
+            <div class="rabby-container">
+                <button id="add-to-rabby" class="btn btn-rabby">
+                    🐰 Setup Rabby Wallet
+                </button>
+                <div id="rabby-status" class="rabby-status" style="display: none;">
+                    <div class="status-message">
+                        <span class="spinner"></span>
+                        <span id="rabby-status-text">Detecting ToRPC proxy client...</span>
+                    </div>
+                    <div id="rabby-rpc-info" class="rpc-info" style="display: none;">
+                        <label>RPC URL for Rabby:</label>
+                        <div class="input-group">
+                            <input type="text" id="rabby-rpc-url" readonly class="rpc-url-input">
+                            <button id="rabby-copy-btn" class="btn btn-small">Copy</button>
+                        </div>
+                    </div>
+                    <button id="rabby-add-network-btn" class="btn btn-primary" style="display: none;">
+                        Add to Rabby Wallet
+                    </button>
+                    <div id="rabby-instructions" class="instructions" style="display: none;">
+                        <h4>Manual Setup:</h4>
+                        <ol>
+                            <li>Copy the RPC URL above</li>
+                            <li>Open Rabby extension → Settings → Custom RPC</li>
+                            <li>Click "Add Custom RPC"</li>
+                            <li>Enter the following:
+                                <ul>
+                                    <li>Network Name: <code>ToRPC Privacy Network</code></li>
+                                    <li>RPC URL: <em>(paste the copied URL)</em></li>
+                                    <li>Chain ID: <code>1</code> (mainnet) or <code>1337</code> (dev)</li>
+                                    <li>Symbol: <code>ETH</code></li>
+                                </ul>
+                            </li>
+                        </ol>
+                    </div>
+                </div>
+            </div>
+        </section>
+
         <section class="test-section">
             <h2>Test RPC Connection</h2>
             
@@ -107,6 +288,11 @@
         </footer>
     </div>
 
+    <script src="metamask-helper.js"></script>
+    <script src="trustwallet-helper.js"></script>
+    <script src="coinbase-helper.js"></script>
+    <script src="rainbow-helper.js"></script>
+    <script src="rabby-helper.js"></script>
     <script src="app.js"></script>
 </body>
 </html>
