@@ -1,11 +1,11 @@
 use axum::{
     extract::Request,
-    http::{HeaderMap, HeaderValue, StatusCode},
+    http::{HeaderValue, StatusCode},
     middleware::Next,
     response::Response,
 };
 use std::time::{Duration, Instant};
-use tracing::{debug, warn, error, info};
+use tracing::{debug, warn, info};
 use serde_json::json;
 use tower::ServiceBuilder;
 use tower_http::timeout::TimeoutLayer;
@@ -212,6 +212,7 @@ impl RequestPatternAnalyzer {
             "web3_sha3".to_string(),
             "eth_sendRawTransaction".to_string(),
             "eth_sendBundle".to_string(),
+            "eth_getLogs".to_string(),
         ];
 
         Self {
@@ -302,7 +303,7 @@ pub async fn add_security_headers(request: Request, next: Next) -> Response {
     // Content Security Policy - allows local resources while maintaining security
     headers.insert(
         "Content-Security-Policy", 
-        HeaderValue::from_static("default-src 'self'; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+        HeaderValue::from_static("default-src 'self'; connect-src 'self' http://localhost:8081; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
     );
     
     // Prevent caching of responses
