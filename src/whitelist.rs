@@ -49,10 +49,29 @@ static ALLOWED_METHODS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     methods
 });
 
+/// List of send RPC methods
+static SEND_METHODS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
+    let mut methods = HashSet::new();
+    
+    // Write methods we allow
+    methods.insert("eth_sendRawTransaction");
+
+    // MOO: do we want to handle other send methods ?
+    
+    methods
+});
+
 /// Check if a method is allowed
 pub fn is_method_allowed(method: &str) -> bool {
     ALLOWED_METHODS.contains(method)
 }
+
+/// Check if a method is send tx method
+/// MOO: move this to other module?
+pub fn is_send_method(method: &str) -> bool {
+    SEND_METHODS.contains(method)
+}
+
 
 /// Get a list of all allowed methods (for documentation)
 pub fn get_allowed_methods() -> Vec<&'static str> {
