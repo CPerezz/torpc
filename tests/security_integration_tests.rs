@@ -73,7 +73,7 @@ fn build_router(geth_url: String, max_body_size: usize, write_limit: u32) -> Rou
 }
 
 fn mock_geth_block_number(server: &mut mockito::ServerGuard, value: &str) -> mockito::Mock {
-    let body = format!(r#"{{"jsonrpc":"2.0","result":"{}","id":1}}"#, value);
+    let body = format!(r#"{{"jsonrpc":"2.0","result":"{value}","id":1}}"#);
     server
         .mock("POST", "/")
         .with_status(200)
@@ -225,10 +225,18 @@ async fn metrics_endpoint_reports_circuit_state() {
     // After Phase-Option-C the component-state info migrated from /health
     // to /metrics. Verify operators still get the geth/mev circuit
     // summary they need for routing decisions.
-    let server = TestServer::new(build_router("http://127.0.0.1:1".to_string(), 1024 * 1024, 100))
-        .unwrap();
+    let server = TestServer::new(build_router(
+        "http://127.0.0.1:1".to_string(),
+        1024 * 1024,
+        100,
+    ))
+    .unwrap();
     let body: serde_json::Value = server.get("/metrics").await.json();
     assert!(body["circuits"]["geth"].is_string());
     assert_eq!(body["circuits"]["mev_relay"], "disabled");
-    assert_eq!(body["service"].as_str(), None, "service field belongs in /health, not /metrics");
+    assert_eq!(
+        body["service"].as_str(),
+        None,
+        "service field belongs in /health, not /metrics"
+    );
 }

@@ -12,16 +12,16 @@ use axum::{extract::DefaultBodyLimit, middleware, routing::post, Router};
 use axum_test::TestServer;
 use serde_json::json;
 use std::time::Duration;
-use torpc::security::{
-    json_rpc_timeout_middleware, security_headers_middleware, STATIC_CSP,
-};
+use torpc::security::{json_rpc_timeout_middleware, security_headers_middleware, STATIC_CSP};
 
 async fn slow_handler() -> &'static str {
     tokio::time::sleep(Duration::from_millis(500)).await;
     "should never be reached"
 }
 
-async fn echo_handler(axum::Json(body): axum::Json<serde_json::Value>) -> axum::Json<serde_json::Value> {
+async fn echo_handler(
+    axum::Json(body): axum::Json<serde_json::Value>,
+) -> axum::Json<serde_json::Value> {
     axum::Json(body)
 }
 
@@ -32,7 +32,10 @@ fn build_router(timeout: Duration, body_limit: usize) -> Router {
         .route("/slow", post(slow_handler))
         .route("/echo", post(echo_handler))
         .layer(DefaultBodyLimit::max(body_limit))
-        .layer(middleware::from_fn_with_state(timeout, json_rpc_timeout_middleware))
+        .layer(middleware::from_fn_with_state(
+            timeout,
+            json_rpc_timeout_middleware,
+        ))
         .layer(middleware::from_fn(security_headers_middleware))
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
             axum::http::header::CONTENT_SECURITY_POLICY,
@@ -76,7 +79,10 @@ async fn body_limit_response_carries_security_headers() {
 
     assert_eq!(response.status_code(), 413);
     assert_eq!(response.header("x-content-type-options"), "nosniff");
-    assert_eq!(response.header("cache-control"), "no-store, no-cache, must-revalidate");
+    assert_eq!(
+        response.header("cache-control"),
+        "no-store, no-cache, must-revalidate"
+    );
 }
 
 /// Sanity: a normal request below the body limit and within the timeout

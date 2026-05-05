@@ -67,7 +67,7 @@ impl ProxyState {
         let geth_client = Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
-            .map_err(|e| ProxyError::InternalError(format!("HTTP client init failed: {}", e)))?;
+            .map_err(|e| ProxyError::InternalError(format!("HTTP client init failed: {e}")))?;
 
         let write_method_limiter = Arc::new(RateLimiter::new(RateLimitConfig {
             max_requests: WRITE_METHOD_DEFAULT_REQUESTS,
@@ -127,11 +127,12 @@ pub async fn handle_rpc(
     Json(request): Json<JsonRpcRequest>,
 ) -> ProxyResult<Json<JsonRpcResponse>> {
     debug!("Received RPC request: method={}", request.method);
-    
+
     // Validate request
-    request.validate()
+    request
+        .validate()
         .map_err(|e| ProxyError::InvalidRequest(e.to_string()))?;
-    
+
     // Check if method is allowed
     if !is_method_allowed(&request.method) {
         state.metrics.increment_invalid_methods();
@@ -160,11 +161,12 @@ pub async fn handle_flashbots(
     Json(request): Json<JsonRpcRequest>,
 ) -> ProxyResult<Json<JsonRpcResponse>> {
     debug!("Received Flashbots RPC request: method={}", request.method);
-    
+
     // Validate request
-    request.validate()
+    request
+        .validate()
         .map_err(|e| ProxyError::InvalidRequest(e.to_string()))?;
-    
+
     // Check if method is allowed
     if !is_method_allowed(&request.method) {
         state.metrics.increment_invalid_methods();
@@ -229,7 +231,9 @@ pub async fn proxy_to_geth(
             // version strings.
             error!("Failed to send request to Geth: {}", e);
             state.geth_circuit.record_failure().await;
-            return Err(ProxyError::UpstreamError("upstream unavailable".to_string()));
+            return Err(ProxyError::UpstreamError(
+                "upstream unavailable".to_string(),
+            ));
         }
     };
 
@@ -257,8 +261,7 @@ pub async fn proxy_to_geth(
             error!("Failed to parse Geth response: {}", e);
             state.geth_circuit.record_failure().await;
             return Err(ProxyError::UpstreamError(format!(
-                "Failed to parse response: {}",
-                e
+                "Failed to parse response: {e}"
             )));
         }
     };
@@ -283,7 +286,8 @@ async fn proxy_to_flashbots(
         return Ok(JsonRpcResponse::error(
             request.id,
             -32004,
-            "MEV protection not configured: set FLASHBOTS_SIGNING_KEY to enable bundle submission".to_string(),
+            "MEV protection not configured: set FLASHBOTS_SIGNING_KEY to enable bundle submission"
+                .to_string(),
             None,
         ));
     }
@@ -299,7 +303,7 @@ mod tests {
     use serde_json::json;
 
     fn create_test_state(server_url: String) -> ProxyState {
-        ProxyState::new(server_url.clone(), format!("{}/flashbots", server_url))
+        ProxyState::new(server_url.clone(), format!("{server_url}/flashbots"))
             .expect("ProxyState::new must succeed in tests")
     }
 
@@ -317,12 +321,10 @@ mod tests {
 
         // Reads are unlimited (the per-port limiter handles them, not this).
         for _ in 0..50 {
-            assert!(
-                state
-                    .check_write_method_rate_limit("eth_blockNumber")
-                    .await
-                    .is_ok()
-            );
+            assert!(state
+                .check_write_method_rate_limit("eth_blockNumber")
+                .await
+                .is_ok());
         }
     }
 
@@ -357,24 +359,25 @@ mod tests {
     #[tokio::test]
     async fn test_handle_rpc_valid_request() {
         let mut server = Server::new_async().await;
-        let _m = server.mock("POST", "/")
+        let _m = server
+            .mock("POST", "/")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"jsonrpc":"2.0","result":"0x123","id":1}"#)
             .create();
-            
+
         let state = Arc::new(create_test_state(server.url()));
-        
+
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: "eth_blockNumber".to_string(),
             params: None,
             id: Some(json!(1)),
         };
-        
+
         let result = handle_rpc(State(state), Json(request)).await;
         assert!(result.is_ok());
-        
+
         let response = result.unwrap().0;
         assert_eq!(response.result, Some(json!("0x123")));
     }
@@ -383,17 +386,17 @@ mod tests {
     async fn test_handle_rpc_blocked_method() {
         let server = Server::new_async().await;
         let state = Arc::new(create_test_state(server.url()));
-        
+
         let request = JsonRpcRequest {
             jsonrpc: "2.0".to_string(),
             method: "eth_accounts".to_string(),
             params: None,
             id: Some(json!(1)),
         };
-        
+
         let result = handle_rpc(State(state), Json(request)).await;
         assert!(result.is_err());
-        
+
         match result.unwrap_err() {
             ProxyError::MethodNotAllowed(method) => {
                 assert_eq!(method, "eth_accounts");
@@ -410,7 +413,8 @@ mod tests {
     #[tokio::test]
     async fn test_handle_flashbots_raw_tx_falls_back_to_geth() {
         let mut server = Server::new_async().await;
-        let _m = server.mock("POST", "/")
+        let _m = server
+            .mock("POST", "/")
             .with_status(200)
             .with_header("content-type", "application/json")
             .with_body(r#"{"jsonrpc":"2.0","result":"0xhash","id":1}"#)
@@ -444,8 +448,13 @@ mod tests {
             id: Some(json!(7)),
         };
 
-        let response = handle_flashbots(State(state), Json(request)).await.unwrap().0;
-        let err = response.error.expect("expected JSON-RPC error when MEV not configured");
+        let response = handle_flashbots(State(state), Json(request))
+            .await
+            .unwrap()
+            .0;
+        let err = response
+            .error
+            .expect("expected JSON-RPC error when MEV not configured");
         assert_eq!(err.code, -32004);
         assert!(err.message.contains("MEV protection not configured"));
         assert_eq!(response.id, Some(json!(7)));
@@ -455,17 +464,17 @@ mod tests {
     async fn test_invalid_json_rpc_version() {
         let server = Server::new_async().await;
         let state = Arc::new(create_test_state(server.url()));
-        
+
         let request = JsonRpcRequest {
             jsonrpc: "1.0".to_string(),
             method: "eth_blockNumber".to_string(),
             params: None,
             id: Some(json!(1)),
         };
-        
+
         let result = handle_rpc(State(state), Json(request)).await;
         assert!(result.is_err());
-        
+
         match result.unwrap_err() {
             ProxyError::InvalidRequest(msg) => {
                 assert!(msg.contains("jsonrpc version"));

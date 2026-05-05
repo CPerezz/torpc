@@ -1,17 +1,9 @@
-use axum::{
-    extract::DefaultBodyLimit,
-    http::StatusCode,
-    middleware,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::DefaultBodyLimit, http::StatusCode, middleware, routing::post, Json, Router};
 use axum_test::TestServer;
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::time::sleep;
-use torpc::security::{
-    json_rpc_timeout_middleware, security_headers_middleware, SecurityConfig,
-};
+use torpc::security::{json_rpc_timeout_middleware, security_headers_middleware, SecurityConfig};
 
 // Test handler that echoes back the request
 async fn echo_handler(Json(payload): Json<Value>) -> Json<Value> {
@@ -63,19 +55,16 @@ fn create_test_router_with_default_limits() -> Router {
 async fn test_request_under_size_limit() {
     let app = create_test_router_with_default_limits();
     let server = TestServer::new(app).unwrap();
-    
+
     let small_payload = json!({
         "jsonrpc": "2.0",
         "method": "eth_blockNumber",
         "id": 1,
         "data": "x".repeat(100) // 100 bytes
     });
-    
-    let response = server
-        .post("/echo")
-        .json(&small_payload)
-        .await;
-    
+
+    let response = server.post("/echo").json(&small_payload).await;
+
     assert_eq!(response.status_code(), StatusCode::OK);
     let response_json: Value = response.json();
     assert_eq!(response_json["data"], "x".repeat(100));
@@ -86,18 +75,15 @@ async fn test_request_at_size_limit() {
     // Create router with 1KB limit for precise testing
     let app = create_test_router_with_limits(1024, 30);
     let server = TestServer::new(app).unwrap();
-    
+
     // Create payload that's exactly at the limit (accounting for JSON overhead)
     let data_size = 900; // Leave room for JSON structure
     let payload = json!({
         "data": "x".repeat(data_size)
     });
-    
-    let response = server
-        .post("/echo")
-        .json(&payload)
-        .await;
-    
+
+    let response = server.post("/echo").json(&payload).await;
+
     assert_eq!(response.status_code(), StatusCode::OK);
 }
 
@@ -106,22 +92,19 @@ async fn test_request_over_size_limit() {
     // Create router with 1KB limit
     let app = create_test_router_with_limits(1024, 30);
     let server = TestServer::new(app).unwrap();
-    
+
     // Create payload larger than 1KB
     let large_payload = json!({
         "jsonrpc": "2.0",
-        "method": "eth_call", 
+        "method": "eth_call",
         "params": [{
             "data": "x".repeat(2048) // 2KB of data
         }],
         "id": 1
     });
-    
-    let response = server
-        .post("/echo")
-        .json(&large_payload)
-        .await;
-    
+
+    let response = server.post("/echo").json(&large_payload).await;
+
     assert_eq!(response.status_code(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
@@ -129,7 +112,7 @@ async fn test_request_over_size_limit() {
 async fn test_very_large_request() {
     let app = create_test_router_with_default_limits();
     let server = TestServer::new(app).unwrap();
-    
+
     // Create a 2MB payload (larger than default 1MB limit)
     let very_large_payload = json!({
         "jsonrpc": "2.0",
@@ -139,12 +122,9 @@ async fn test_very_large_request() {
         }],
         "id": 1
     });
-    
-    let response = server
-        .post("/echo")
-        .json(&very_large_payload)
-        .await;
-    
+
+    let response = server.post("/echo").json(&very_large_payload).await;
+
     assert_eq!(response.status_code(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
@@ -153,17 +133,14 @@ async fn test_request_timeout_under_limit() {
     // Create router with 5 second timeout
     let app = create_test_router_with_limits(1024 * 1024, 5);
     let server = TestServer::new(app).unwrap();
-    
+
     let payload = json!({
         "delay_ms": 2000, // 2 seconds - under limit
         "message": "test"
     });
-    
-    let response = server
-        .post("/delay")
-        .json(&payload)
-        .await;
-    
+
+    let response = server.post("/delay").json(&payload).await;
+
     assert_eq!(response.status_code(), StatusCode::OK);
     let response_json: Value = response.json();
     assert_eq!(response_json["message"], "test");
@@ -174,16 +151,13 @@ async fn test_request_timeout_over_limit() {
     // Create router with 2 second timeout
     let app = create_test_router_with_limits(1024 * 1024, 2);
     let server = TestServer::new(app).unwrap();
-    
+
     let payload = json!({
         "delay_ms": 5000, // 5 seconds - over 2 second limit
         "message": "should timeout"
     });
-    
-    let response = server
-        .post("/delay")
-        .json(&payload)
-        .await;
+
+    let response = server.post("/delay").json(&payload).await;
 
     // The new JSON-RPC timeout middleware returns 504 (gateway timeout)
     // with a `-32001` body — the prior bare `tower-http::TimeoutLayer`
@@ -197,30 +171,27 @@ async fn test_request_timeout_over_limit() {
 async fn test_multiple_size_limits() {
     // Test different size limits
     let test_cases = vec![
-        (512, "x".repeat(256), StatusCode::OK),           // Under limit
+        (512, "x".repeat(256), StatusCode::OK), // Under limit
         (512, "x".repeat(1024), StatusCode::PAYLOAD_TOO_LARGE), // Over limit
-        (2048, "x".repeat(1024), StatusCode::OK),         // Under larger limit
+        (2048, "x".repeat(1024), StatusCode::OK), // Under larger limit
         (2048, "x".repeat(4096), StatusCode::PAYLOAD_TOO_LARGE), // Over larger limit
     ];
-    
+
     for (limit, data, expected_status) in test_cases {
         let app = create_test_router_with_limits(limit, 30);
         let server = TestServer::new(app).unwrap();
-        
+
         let payload = json!({
             "data": data
         });
-        
-        let response = server
-            .post("/echo")
-            .json(&payload)
-            .await;
-        
+
+        let response = server.post("/echo").json(&payload).await;
+
         assert_eq!(
-            response.status_code(), 
+            response.status_code(),
             expected_status,
-            "Failed for limit {} with data size {}", 
-            limit, 
+            "Failed for limit {} with data size {}",
+            limit,
             data.len()
         );
     }
@@ -230,32 +201,27 @@ async fn test_multiple_size_limits() {
 async fn test_multiple_timeout_limits() {
     // Test different timeout limits. New middleware returns 504, not 408.
     let test_cases = vec![
-        (5, 2000, StatusCode::OK),                    // 2s delay with 5s limit
-        (5, 8000, StatusCode::GATEWAY_TIMEOUT),       // 8s delay with 5s limit
-        (10, 5000, StatusCode::OK),                   // 5s delay with 10s limit
-        (1, 2000, StatusCode::GATEWAY_TIMEOUT),       // 2s delay with 1s limit
+        (5, 2000, StatusCode::OK),              // 2s delay with 5s limit
+        (5, 8000, StatusCode::GATEWAY_TIMEOUT), // 8s delay with 5s limit
+        (10, 5000, StatusCode::OK),             // 5s delay with 10s limit
+        (1, 2000, StatusCode::GATEWAY_TIMEOUT), // 2s delay with 1s limit
     ];
-    
+
     for (timeout_secs, delay_ms, expected_status) in test_cases {
         let app = create_test_router_with_limits(1024 * 1024, timeout_secs);
         let server = TestServer::new(app).unwrap();
-        
+
         let payload = json!({
             "delay_ms": delay_ms,
             "test": "timeout"
         });
-        
-        let response = server
-            .post("/delay")
-            .json(&payload)
-            .await;
-        
+
+        let response = server.post("/delay").json(&payload).await;
+
         assert_eq!(
-            response.status_code(), 
+            response.status_code(),
             expected_status,
-            "Failed for timeout {}s with delay {}ms", 
-            timeout_secs, 
-            delay_ms
+            "Failed for timeout {timeout_secs}s with delay {delay_ms}ms"
         );
     }
 }
@@ -264,18 +230,15 @@ async fn test_multiple_timeout_limits() {
 async fn test_security_headers_on_size_limit_error() {
     let app = create_test_router_with_limits(512, 30);
     let server = TestServer::new(app).unwrap();
-    
+
     let large_payload = json!({
         "data": "x".repeat(1024) // Over 512 byte limit
     });
-    
-    let response = server
-        .post("/echo")
-        .json(&large_payload)
-        .await;
-    
+
+    let response = server.post("/echo").json(&large_payload).await;
+
     assert_eq!(response.status_code(), StatusCode::PAYLOAD_TOO_LARGE);
-    
+
     // Verify security headers are present even on error
     assert_eq!(response.header("X-Content-Type-Options"), "nosniff");
     assert_eq!(response.header("X-Frame-Options"), "DENY");
@@ -286,16 +249,13 @@ async fn test_security_headers_on_size_limit_error() {
 async fn test_security_headers_on_timeout_error() {
     let app = create_test_router_with_limits(1024 * 1024, 1);
     let server = TestServer::new(app).unwrap();
-    
+
     let payload = json!({
         "delay_ms": 3000, // 3 seconds with 1 second timeout
         "data": "timeout test"
     });
-    
-    let response = server
-        .post("/delay")
-        .json(&payload)
-        .await;
+
+    let response = server.post("/delay").json(&payload).await;
 
     assert_eq!(response.status_code(), StatusCode::GATEWAY_TIMEOUT);
 
@@ -309,7 +269,7 @@ async fn test_security_headers_on_timeout_error() {
 async fn test_json_rpc_structure_size_limits() {
     let app = create_test_router_with_limits(1024, 30);
     let server = TestServer::new(app).unwrap();
-    
+
     // Test JSON-RPC request that exceeds size limit
     let large_rpc_request = json!({
         "jsonrpc": "2.0",
@@ -323,12 +283,9 @@ async fn test_json_rpc_structure_size_limits() {
         ],
         "id": 1
     });
-    
-    let response = server
-        .post("/echo")
-        .json(&large_rpc_request)
-        .await;
-    
+
+    let response = server.post("/echo").json(&large_rpc_request).await;
+
     assert_eq!(response.status_code(), StatusCode::PAYLOAD_TOO_LARGE);
 }
 
@@ -336,14 +293,11 @@ async fn test_json_rpc_structure_size_limits() {
 async fn test_empty_request_handling() {
     let app = create_test_router_with_default_limits();
     let server = TestServer::new(app).unwrap();
-    
+
     let empty_payload = json!({});
-    
-    let response = server
-        .post("/echo")
-        .json(&empty_payload)
-        .await;
-    
+
+    let response = server.post("/echo").json(&empty_payload).await;
+
     assert_eq!(response.status_code(), StatusCode::OK);
     let response_json: Value = response.json();
     assert_eq!(response_json, json!({}));
@@ -354,26 +308,24 @@ async fn test_security_config_from_environment() {
     // Test that SecurityConfig respects environment variables
     std::env::set_var("MAX_BODY_SIZE", "2048");
     std::env::set_var("REQUEST_TIMEOUT", "5");
-    
+
     let config = SecurityConfig::from_env();
     assert_eq!(config.max_body_size, 2048);
     assert_eq!(config.request_timeout.as_secs(), 5);
-    
+
     // Test router with environment config
-    let app = create_test_router_with_limits(config.max_body_size, config.request_timeout.as_secs());
+    let app =
+        create_test_router_with_limits(config.max_body_size, config.request_timeout.as_secs());
     let server = TestServer::new(app).unwrap();
-    
+
     let payload = json!({
         "data": "x".repeat(1500) // Between 1024 (default) and 2048 (env)
     });
-    
-    let response = server
-        .post("/echo")
-        .json(&payload)
-        .await;
-    
+
+    let response = server.post("/echo").json(&payload).await;
+
     assert_eq!(response.status_code(), StatusCode::OK);
-    
+
     // Clean up environment
     std::env::remove_var("MAX_BODY_SIZE");
     std::env::remove_var("REQUEST_TIMEOUT");
@@ -383,25 +335,28 @@ async fn test_security_config_from_environment() {
 async fn test_sequential_requests_size_limits() {
     let app = create_test_router_with_limits(1024, 30);
     let server = TestServer::new(app).unwrap();
-    
+
     // Test multiple requests sequentially - some valid, some oversized
     let test_cases = vec![
         (json!({"data": "x".repeat(500)}), StatusCode::OK),
-        (json!({"data": "x".repeat(2000)}), StatusCode::PAYLOAD_TOO_LARGE),
+        (
+            json!({"data": "x".repeat(2000)}),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
         (json!({"data": "x".repeat(800)}), StatusCode::OK),
-        (json!({"data": "x".repeat(1500)}), StatusCode::PAYLOAD_TOO_LARGE),
+        (
+            json!({"data": "x".repeat(1500)}),
+            StatusCode::PAYLOAD_TOO_LARGE,
+        ),
     ];
-    
+
     for (payload, expected_status) in test_cases {
-        let response = server
-            .post("/echo")
-            .json(&payload)
-            .await;
-        
+        let response = server.post("/echo").json(&payload).await;
+
         assert_eq!(
-            response.status_code(), 
+            response.status_code(),
             expected_status,
-            "Failed for payload size {}", 
+            "Failed for payload size {}",
             payload.to_string().len()
         );
     }

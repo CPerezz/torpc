@@ -1,6 +1,6 @@
+use anyhow::{Context, Result};
 use std::fs;
 use std::path::Path;
-use anyhow::{Context, Result};
 use tracing::{info, warn};
 
 /// Tor service configuration and utilities
@@ -16,7 +16,7 @@ impl TorService {
             config_path: "./configs/torrc".to_string(),
         }
     }
-    
+
     /// Check if Tor is properly configured.
     ///
     /// In addition to verifying the torrc file and data directory, this
@@ -59,8 +59,7 @@ impl TorService {
             let val = tokens.next().unwrap_or("");
             let is_anonymity_disabling = matches!(
                 (key, val),
-                ("HiddenServiceSingleHopMode", "1")
-                    | ("HiddenServiceNonAnonymousMode", "1")
+                ("HiddenServiceSingleHopMode", "1") | ("HiddenServiceNonAnonymousMode", "1")
             );
             if is_anonymity_disabling {
                 if allow_override {
@@ -86,8 +85,7 @@ impl TorService {
         let data_dir = Path::new("./data/tor/torpc");
         if !data_dir.exists() {
             warn!("Tor data directory doesn't exist, creating it...");
-            fs::create_dir_all(data_dir)
-                .context("Failed to create Tor data directory")?;
+            fs::create_dir_all(data_dir).context("Failed to create Tor data directory")?;
         }
 
         #[cfg(unix)]
@@ -98,8 +96,8 @@ impl TorService {
                 .context("Failed to set Tor directory permissions to 0700")?;
             // Verify the bits actually stuck — some filesystems silently
             // ignore mode changes (e.g. SMB mounts).
-            let metadata = fs::metadata(data_dir)
-                .context("Failed to read Tor data directory metadata")?;
+            let metadata =
+                fs::metadata(data_dir).context("Failed to read Tor data directory metadata")?;
             let mode = metadata.permissions().mode() & 0o777;
             if mode != 0o700 {
                 anyhow::bail!(
@@ -114,44 +112,44 @@ impl TorService {
         info!("Tor configuration verified");
         Ok(())
     }
-    
+
     /// Get the .onion hostname if available
     pub fn get_hostname(&self) -> Result<Option<String>> {
         let hostname_path = Path::new(&self.hostname_path);
-        
+
         if !hostname_path.exists() {
             info!("Hostname file not found - Tor service may not be running yet");
             return Ok(None);
         }
-        
+
         let hostname = fs::read_to_string(hostname_path)
             .context("Failed to read hostname file")?
             .trim()
             .to_string();
-            
+
         if hostname.is_empty() {
             return Ok(None);
         }
-        
+
         // Validate it looks like a .onion address
         if !hostname.ends_with(".onion") {
             anyhow::bail!("Invalid hostname format: {}", hostname);
         }
-        
+
         Ok(Some(hostname))
     }
-    
+
     /// Get the full onion URL for a given path
     pub fn get_onion_url(&self, path: &str) -> Result<Option<String>> {
         match self.get_hostname()? {
             Some(hostname) => {
-                let url = format!("http://{}{}", hostname, path);
+                let url = format!("http://{hostname}{path}");
                 Ok(Some(url))
             }
             None => Ok(None),
         }
     }
-    
+
     /// Check if Tor appears to be running by looking for the hostname file
     pub fn is_running(&self) -> bool {
         Path::new(&self.hostname_path).exists()
@@ -167,84 +165,84 @@ impl Default for TorService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use tempfile::TempDir;
     use std::fs;
-    
+    use tempfile::TempDir;
+
     #[test]
     fn test_get_hostname_missing_file() {
         let tor = TorService {
             hostname_path: "/nonexistent/path/hostname".to_string(),
             config_path: "./configs/torrc".to_string(),
         };
-        
+
         let result = tor.get_hostname().unwrap();
         assert!(result.is_none());
     }
-    
+
     #[test]
     fn test_get_hostname_valid() {
         let temp_dir = TempDir::new().unwrap();
         let hostname_path = temp_dir.path().join("hostname");
-        
+
         fs::write(&hostname_path, "test3xamplee2onion.onion\n").unwrap();
-        
+
         let tor = TorService {
             hostname_path: hostname_path.to_str().unwrap().to_string(),
             config_path: "./configs/torrc".to_string(),
         };
-        
+
         let result = tor.get_hostname().unwrap();
         assert_eq!(result, Some("test3xamplee2onion.onion".to_string()));
     }
-    
+
     #[test]
     fn test_get_hostname_invalid_format() {
         let temp_dir = TempDir::new().unwrap();
         let hostname_path = temp_dir.path().join("hostname");
-        
+
         fs::write(&hostname_path, "not-an-onion-address").unwrap();
-        
+
         let tor = TorService {
             hostname_path: hostname_path.to_str().unwrap().to_string(),
             config_path: "./configs/torrc".to_string(),
         };
-        
+
         let result = tor.get_hostname();
         assert!(result.is_err());
     }
-    
+
     #[test]
     fn test_get_onion_url() {
         let temp_dir = TempDir::new().unwrap();
         let hostname_path = temp_dir.path().join("hostname");
-        
+
         fs::write(&hostname_path, "test3xamplee2onion.onion\n").unwrap();
-        
+
         let tor = TorService {
             hostname_path: hostname_path.to_str().unwrap().to_string(),
             config_path: "./configs/torrc".to_string(),
         };
-        
+
         let url = tor.get_onion_url("/rpc").unwrap();
         assert_eq!(url, Some("http://test3xamplee2onion.onion/rpc".to_string()));
     }
-    
+
     #[test]
     fn test_is_running() {
         let temp_dir = TempDir::new().unwrap();
         let hostname_path = temp_dir.path().join("hostname");
-        
+
         let tor = TorService {
             hostname_path: hostname_path.to_str().unwrap().to_string(),
             config_path: "./configs/torrc".to_string(),
         };
-        
+
         // Not running initially
         assert!(!tor.is_running());
-        
+
         // Create hostname file
         fs::write(&hostname_path, "test.onion").unwrap();
-        
+
         // Should appear as running
         assert!(tor.is_running());
     }

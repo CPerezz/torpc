@@ -81,11 +81,7 @@ fn first_env_var(names: &[&str]) -> Option<String> {
     }
     if let (Some(idx), true) = (found_at, names.len() > 1) {
         if idx > 0 {
-            tracing::warn!(
-                "{} is deprecated; prefer {}",
-                names[idx],
-                names[0]
-            );
+            tracing::warn!("{} is deprecated; prefer {}", names[idx], names[0]);
         }
     }
     value
@@ -178,7 +174,10 @@ pub async fn add_security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
     let headers = response.headers_mut();
 
-    headers.insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
+    headers.insert(
+        "X-Content-Type-Options",
+        HeaderValue::from_static("nosniff"),
+    );
     headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
     headers.insert("X-XSS-Protection", HeaderValue::from_static("0"));
     headers.insert("Referrer-Policy", HeaderValue::from_static("no-referrer"));
@@ -210,7 +209,9 @@ pub async fn add_security_headers(request: Request, next: Next) -> Response {
 /// Privacy note: every field returned here must be safe to share with an
 /// anonymous Tor client. The fields below are deliberately vanilla.
 pub async fn health_check(
-    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::mev::mev_handler::MevProxyState>>,
+    axum::extract::State(state): axum::extract::State<
+        std::sync::Arc<crate::mev::mev_handler::MevProxyState>,
+    >,
 ) -> Result<axum::Json<serde_json::Value>, StatusCode> {
     Ok(axum::Json(json!({
         "status": "ok",
@@ -230,7 +231,9 @@ pub async fn health_check(
 /// MEV relay (when configured). This is where component-state observability
 /// lives now that `/health` is intentionally minimal.
 pub async fn security_metrics(
-    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::mev::mev_handler::MevProxyState>>,
+    axum::extract::State(state): axum::extract::State<
+        std::sync::Arc<crate::mev::mev_handler::MevProxyState>,
+    >,
 ) -> Result<axum::Json<serde_json::Value>, StatusCode> {
     let geth_circuit = state.base_state.geth_circuit.state_summary();
     let (mev_relay_status, mev_circuit) = match &state.mev_client {
@@ -357,12 +360,12 @@ mod tests {
             "should never get here"
         }
 
-        let app = Router::new()
-            .route("/slow", get(slow_handler))
-            .layer(axum::middleware::from_fn_with_state(
+        let app = Router::new().route("/slow", get(slow_handler)).layer(
+            axum::middleware::from_fn_with_state(
                 Duration::from_millis(50),
                 json_rpc_timeout_middleware,
-            ));
+            ),
+        );
 
         let server = TestServer::new(app).unwrap();
         let response = server.get("/slow").await;
@@ -407,26 +410,26 @@ mod tests {
         let config = SecurityConfig::from_env();
         assert_eq!(config.max_body_size, 1024 * 1024);
         assert_eq!(config.request_timeout.as_secs(), 30);
-        assert_eq!(config.strict_headers, true);
+        assert!(config.strict_headers);
 
         // Test with environment variables set
         std::env::set_var("MAX_BODY_SIZE", "2097152"); // 2MB
         std::env::set_var("REQUEST_TIMEOUT", "60");
         std::env::set_var("STRICT_HEADERS", "false");
-        
+
         let env_config = SecurityConfig::from_env();
         assert_eq!(env_config.max_body_size, 2097152);
         assert_eq!(env_config.request_timeout.as_secs(), 60);
-        assert_eq!(env_config.strict_headers, false);
-        
+        assert!(!env_config.strict_headers);
+
         // Test with invalid values (should fall back to defaults)
         std::env::set_var("MAX_BODY_SIZE", "invalid");
         std::env::set_var("REQUEST_TIMEOUT", "invalid");
-        
+
         let fallback_config = SecurityConfig::from_env();
         assert_eq!(fallback_config.max_body_size, 1024 * 1024); // Default
         assert_eq!(fallback_config.request_timeout.as_secs(), 30); // Default
-        
+
         // Clean up environment variables
         std::env::remove_var("MAX_BODY_SIZE");
         std::env::remove_var("REQUEST_TIMEOUT");

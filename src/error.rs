@@ -11,31 +11,31 @@ use crate::rpc_types::JsonRpcResponse;
 pub enum ProxyError {
     #[error("Invalid JSON-RPC request: {0}")]
     InvalidRequest(String),
-    
+
     #[error("Method not allowed: {0}")]
     MethodNotAllowed(String),
-    
+
     #[error("Rate limit exceeded")]
     RateLimitExceeded,
-    
+
     #[error("Upstream connection error: {0}")]
     UpstreamError(String),
-    
+
     #[error("JSON parsing error: {0}")]
     JsonError(String),
-    
+
     #[error("HTTP request error: {0}")]
     HttpError(String),
-    
+
     #[error("Internal server error: {0}")]
     InternalError(String),
-    
+
     #[error("MEV relay error: {0}")]
     MevRelayError(String),
-    
+
     #[error("Bundle simulation failed: {0}")]
     BundleSimulationError(String),
-    
+
     #[error("Flashbots authentication failed")]
     FlashbotsAuthError,
 }
@@ -44,27 +44,22 @@ impl ProxyError {
     /// Convert to JSON-RPC error code
     pub fn to_json_rpc_code(&self) -> i64 {
         match self {
-            ProxyError::InvalidRequest(_) => -32600, // Invalid Request
+            ProxyError::InvalidRequest(_) => -32600,   // Invalid Request
             ProxyError::MethodNotAllowed(_) => -32601, // Method not found
-            ProxyError::RateLimitExceeded => -32000, // Server error
-            ProxyError::JsonError(_) => -32700, // Parse error
-            ProxyError::UpstreamError(_) => -32001, // Server error
-            ProxyError::HttpError(_) => -32002, // Server error
-            ProxyError::InternalError(_) => -32603, // Internal error
-            ProxyError::MevRelayError(_) => -32003, // MEV relay error
+            ProxyError::RateLimitExceeded => -32000,   // Server error
+            ProxyError::JsonError(_) => -32700,        // Parse error
+            ProxyError::UpstreamError(_) => -32001,    // Server error
+            ProxyError::HttpError(_) => -32002,        // Server error
+            ProxyError::InternalError(_) => -32603,    // Internal error
+            ProxyError::MevRelayError(_) => -32003,    // MEV relay error
             ProxyError::BundleSimulationError(_) => -32004, // Bundle simulation error
-            ProxyError::FlashbotsAuthError => -32005, // Authentication error
+            ProxyError::FlashbotsAuthError => -32005,  // Authentication error
         }
     }
-    
+
     /// Convert to JSON-RPC error response
     pub fn to_json_rpc_response(&self, id: Option<serde_json::Value>) -> JsonRpcResponse {
-        JsonRpcResponse::error(
-            id,
-            self.to_json_rpc_code(),
-            self.to_string(),
-            None,
-        )
+        JsonRpcResponse::error(id, self.to_json_rpc_code(), self.to_string(), None)
     }
 }
 
@@ -77,9 +72,9 @@ impl IntoResponse for ProxyError {
             ProxyError::JsonError(_) => StatusCode::BAD_REQUEST,
             _ => StatusCode::INTERNAL_SERVER_ERROR,
         };
-        
+
         let error_response = self.to_json_rpc_response(None);
-        
+
         (status_code, Json(error_response)).into_response()
     }
 }
@@ -113,10 +108,7 @@ mod tests {
             ProxyError::MethodNotAllowed("eth_accounts".to_string()).to_json_rpc_code(),
             -32601
         );
-        assert_eq!(
-            ProxyError::RateLimitExceeded.to_json_rpc_code(),
-            -32000
-        );
+        assert_eq!(ProxyError::RateLimitExceeded.to_json_rpc_code(), -32000);
         assert_eq!(
             ProxyError::JsonError("Parse error".to_string()).to_json_rpc_code(),
             -32700
@@ -127,14 +119,13 @@ mod tests {
     fn test_error_to_json_rpc_response() {
         let error = ProxyError::MethodNotAllowed("eth_accounts".to_string());
         let response = error.to_json_rpc_response(Some(json!(1)));
-        
+
         assert_eq!(response.jsonrpc, "2.0");
         assert!(response.result.is_none());
         assert!(response.error.is_some());
-        
+
         let rpc_error = response.error.unwrap();
         assert_eq!(rpc_error.code, -32601);
         assert_eq!(rpc_error.message, "Method not allowed: eth_accounts");
     }
-
 }

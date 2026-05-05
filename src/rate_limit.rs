@@ -45,12 +45,12 @@ impl RateLimiter {
             requests: Arc::new(Mutex::new(HashMap::new())),
         }
     }
-    
+
     /// Check if a request should be allowed
     pub async fn check_rate_limit(&self, identifier: &str) -> bool {
         let mut requests = self.requests.lock().await;
         let now = Instant::now();
-        
+
         match requests.get_mut(identifier) {
             Some((count, window_start)) => {
                 // Check if we're still in the same window
@@ -70,20 +70,18 @@ impl RateLimiter {
                 requests.insert(identifier.to_string(), (1, now));
             }
         }
-        
+
         true
     }
-    
+
     /// Clean up old entries (call periodically)
     pub async fn cleanup(&self) {
         let mut requests = self.requests.lock().await;
         let now = Instant::now();
-        
+
         // Remove entries older than 2x the window duration
         let cutoff = self.config.window_duration * 2;
-        requests.retain(|_, (_, window_start)| {
-            now.duration_since(*window_start) < cutoff
-        });
+        requests.retain(|_, (_, window_start)| now.duration_since(*window_start) < cutoff);
     }
 }
 
@@ -127,7 +125,7 @@ pub async fn rate_limit_middleware(
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[tokio::test]
     async fn test_rate_limiter_allows_under_limit() {
         let config = RateLimitConfig {
@@ -135,16 +133,17 @@ mod tests {
             window_duration: Duration::from_secs(1),
         };
         let limiter = RateLimiter::new(config);
-        
+
         // Should allow up to 5 requests
         for i in 0..5 {
             assert!(
                 limiter.check_rate_limit("test").await,
-                "Request {} should be allowed", i + 1
+                "Request {} should be allowed",
+                i + 1
             );
         }
     }
-    
+
     #[tokio::test]
     async fn test_rate_limiter_blocks_over_limit() {
         let config = RateLimitConfig {
@@ -152,16 +151,16 @@ mod tests {
             window_duration: Duration::from_secs(1),
         };
         let limiter = RateLimiter::new(config);
-        
+
         // Allow first 3 requests
         for _ in 0..3 {
             assert!(limiter.check_rate_limit("test").await);
         }
-        
+
         // 4th request should be blocked
         assert!(!limiter.check_rate_limit("test").await);
     }
-    
+
     #[tokio::test]
     async fn test_rate_limiter_resets_after_window() {
         let config = RateLimitConfig {
@@ -169,19 +168,19 @@ mod tests {
             window_duration: Duration::from_millis(100),
         };
         let limiter = RateLimiter::new(config);
-        
+
         // Use up the limit
         assert!(limiter.check_rate_limit("test").await);
         assert!(limiter.check_rate_limit("test").await);
         assert!(!limiter.check_rate_limit("test").await);
-        
+
         // Wait for window to expire
         tokio::time::sleep(Duration::from_millis(150)).await;
-        
+
         // Should be allowed again
         assert!(limiter.check_rate_limit("test").await);
     }
-    
+
     #[tokio::test]
     async fn test_rate_limiter_different_identifiers() {
         let config = RateLimitConfig {
@@ -189,17 +188,17 @@ mod tests {
             window_duration: Duration::from_secs(1),
         };
         let limiter = RateLimiter::new(config);
-        
+
         // Different identifiers should have separate limits
         assert!(limiter.check_rate_limit("user1").await);
         assert!(limiter.check_rate_limit("user2").await);
         assert!(limiter.check_rate_limit("user3").await);
-        
+
         // But each is limited individually
         assert!(!limiter.check_rate_limit("user1").await);
         assert!(!limiter.check_rate_limit("user2").await);
     }
-    
+
     #[tokio::test]
     async fn test_cleanup_removes_old_entries() {
         let config = RateLimitConfig {
@@ -207,20 +206,20 @@ mod tests {
             window_duration: Duration::from_millis(50),
         };
         let limiter = RateLimiter::new(config);
-        
+
         // Add some entries
         assert!(limiter.check_rate_limit("old").await);
         assert!(limiter.check_rate_limit("new").await);
-        
+
         // Wait for entries to become old
         tokio::time::sleep(Duration::from_millis(150)).await;
-        
+
         // Add a fresh entry
         assert!(limiter.check_rate_limit("fresh").await);
-        
+
         // Run cleanup
         limiter.cleanup().await;
-        
+
         // Check internal state
         let requests = limiter.requests.lock().await;
         assert!(!requests.contains_key("old"));

@@ -71,12 +71,11 @@ impl AppConfig {
             std::env::var("GETH_URL").unwrap_or_else(|_| "http://127.0.0.1:8545".to_string());
         let flashbots_url = std::env::var("FLASHBOTS_URL")
             .unwrap_or_else(|_| "https://relay.flashbots.net".to_string());
-        let bind_addr =
-            std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+        let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
 
         let mev_signing_key = std::env::var("FLASHBOTS_SIGNING_KEY").ok();
-        let mev_relay_url = std::env::var("FLASHBOTS_RELAY_URL")
-            .unwrap_or_else(|_| flashbots_url.clone());
+        let mev_relay_url =
+            std::env::var("FLASHBOTS_RELAY_URL").unwrap_or_else(|_| flashbots_url.clone());
         let mev_request_timeout = Duration::from_secs(env_u64("FLASHBOTS_REQUEST_TIMEOUT", 5));
 
         let rate_limit = RateLimitConfig {
@@ -189,7 +188,10 @@ pub async fn build_app(config: AppConfig) -> anyhow::Result<BuiltApp> {
         };
         match create_mev_client(mev_config) {
             Ok(client) => {
-                info!("MEV protection enabled with relay: {}", config.mev_relay_url);
+                info!(
+                    "MEV protection enabled with relay: {}",
+                    config.mev_relay_url
+                );
                 Arc::new(MevProxyState {
                     base_state: base_state.clone(),
                     mev_client: Some(client),

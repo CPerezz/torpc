@@ -1,29 +1,29 @@
 //! Retry logic and circuit breaker for MEV relay resilience
-//! 
+//!
 //! This module provides fault tolerance mechanisms to handle
 //! transient failures and prevent cascading failures when
 //! communicating with MEV relays.
 
+use rand::{thread_rng, Rng};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::sync::Mutex;
-use rand::{thread_rng, Rng};
 use tracing::{debug, warn};
 
 use super::types::CircuitState;
 
 /// Implements exponential backoff with jitter for retrying failed requests
-/// 
+///
 /// # For Library Developers
 /// Used internally by MevRelayClient to handle transient failures.
 /// Not exposed in public API.
-/// 
+///
 /// # Retry Strategy
 /// - Initial delay: 100ms
 /// - Max delay: 5s  
 /// - Jitter: ±25% to prevent thundering herd
 /// - Max attempts: 3
-/// 
+///
 /// # Example
 /// ```rust
 /// let policy = RetryPolicy::default();
@@ -63,30 +63,30 @@ impl Default for RetryPolicy {
 
 impl RetryPolicy {
     /// Calculate delay for a given attempt number with exponential backoff
-    /// 
+    ///
     /// # Arguments
     /// * `attempt` - Zero-based attempt number
-    /// 
+    ///
     /// # Returns
     /// Duration to wait before next attempt
     pub fn calculate_delay(&self, attempt: u32) -> Duration {
         // Exponential backoff: delay * 2^attempt
         let base_delay = self.initial_delay.as_millis() as f64 * (2_u32.pow(attempt) as f64);
-        
+
         // Cap at max delay
         let capped_delay = base_delay.min(self.max_delay.as_millis() as f64);
-        
+
         // Add jitter (±jitter_factor)
         let mut rng = thread_rng();
         let jitter_range = capped_delay * self.jitter_factor;
         let jitter = rng.gen_range(-jitter_range..=jitter_range);
         let final_delay = (capped_delay + jitter).max(0.0) as u64;
-        
+
         Duration::from_millis(final_delay)
     }
-    
+
     /// Determine if an error is retryable
-    /// 
+    ///
     /// # For Library Developers
     /// Network errors and timeouts are retryable.
     /// Authentication and validation errors are not.
@@ -95,45 +95,46 @@ impl RetryPolicy {
         if error.contains("authentication") || error.contains("unauthorized") {
             return false;
         }
-        
+
         // Don't retry validation errors
         if error.contains("invalid") || error.contains("malformed") {
             return false;
         }
-        
+
         // Retry network and timeout errors
-        if error.contains("timeout") || 
-           error.contains("connection") || 
-           error.contains("network") ||
-           error.contains("temporarily unavailable") {
+        if error.contains("timeout")
+            || error.contains("connection")
+            || error.contains("network")
+            || error.contains("temporarily unavailable")
+        {
             return true;
         }
-        
+
         // Default: retry on generic errors
         true
     }
 }
 
 /// Circuit breaker to prevent cascading failures
-/// 
+///
 /// # For Library Developers
 /// Tracks consecutive failures and temporarily disables requests
 /// when a threshold is reached.
-/// 
+///
 /// # State Transitions
 /// - Closed -> Open: After 5 consecutive failures
 /// - Open -> HalfOpen: After 30 seconds
 /// - HalfOpen -> Closed: After 1 success
 /// - HalfOpen -> Open: After 1 failure
-/// 
+///
 /// # Example
 /// ```rust
 /// let breaker = CircuitBreaker::new();
-/// 
+///
 /// if !breaker.can_proceed().await {
 ///     return Err("Circuit breaker open");
 /// }
-/// 
+///
 /// match make_request().await {
 ///     Ok(response) => {
 ///         breaker.record_success().await;
@@ -154,6 +155,12 @@ pub struct CircuitBreaker {
     recovery_timeout: Duration,
 }
 
+impl Default for CircuitBreaker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl CircuitBreaker {
     /// Create a new circuit breaker with default settings (threshold 5, recovery 30s).
     pub fn new() -> Self {
@@ -167,7 +174,9 @@ impl CircuitBreaker {
     /// * `recovery_timeout` - How long to remain Open before lazily flipping to HalfOpen.
     pub fn with_config(failure_threshold: u32, recovery_timeout: Duration) -> Self {
         Self {
-            state: Arc::new(Mutex::new(CircuitState::Closed { consecutive_failures: 0 })),
+            state: Arc::new(Mutex::new(CircuitState::Closed {
+                consecutive_failures: 0,
+            })),
             failure_threshold,
             recovery_timeout,
         }
@@ -204,12 +213,16 @@ impl CircuitBreaker {
         match *state {
             CircuitState::HalfOpen => {
                 debug!("Circuit breaker closing after successful recovery");
-                *state = CircuitState::Closed { consecutive_failures: 0 };
+                *state = CircuitState::Closed {
+                    consecutive_failures: 0,
+                };
             }
             // From Closed{n}, success resets the counter — we count *consecutive*
             // failures, so a single success is enough to wipe the slate.
             CircuitState::Closed { .. } => {
-                *state = CircuitState::Closed { consecutive_failures: 0 };
+                *state = CircuitState::Closed {
+                    consecutive_failures: 0,
+                };
             }
             // From Open we shouldn't normally see successes (can_proceed gates them
             // off), but if one slips through (a request started before the breaker
@@ -225,18 +238,26 @@ impl CircuitBreaker {
         let mut state = self.state.lock().await;
 
         match *state {
-            CircuitState::Closed { consecutive_failures } => {
+            CircuitState::Closed {
+                consecutive_failures,
+            } => {
                 let next = consecutive_failures + 1;
                 if next >= self.failure_threshold {
                     warn!("Circuit breaker opened after {} consecutive failures", next);
-                    *state = CircuitState::Open { opened_at: Instant::now() };
+                    *state = CircuitState::Open {
+                        opened_at: Instant::now(),
+                    };
                 } else {
-                    *state = CircuitState::Closed { consecutive_failures: next };
+                    *state = CircuitState::Closed {
+                        consecutive_failures: next,
+                    };
                 }
             }
             CircuitState::HalfOpen => {
                 warn!("Circuit breaker reopening after failed recovery attempt");
-                *state = CircuitState::Open { opened_at: Instant::now() };
+                *state = CircuitState::Open {
+                    opened_at: Instant::now(),
+                };
             }
             // Already Open — additional failures don't change the open timestamp;
             // the recovery timeout still measures from when we first opened.
@@ -265,7 +286,7 @@ impl CircuitBreaker {
 }
 
 /// Tracks consecutive failures for circuit breaker logic
-/// 
+///
 /// # For Library Developers
 /// This is a simpler alternative implementation that just tracks
 /// consecutive failures without the full state machine.
@@ -281,17 +302,17 @@ impl ConsecutiveFailureTracker {
             threshold,
         }
     }
-    
+
     pub async fn record_success(&self) {
         *self.failures.lock().await = 0;
     }
-    
+
     pub async fn record_failure(&self) -> bool {
         let mut failures = self.failures.lock().await;
         *failures += 1;
         *failures >= self.threshold
     }
-    
+
     pub async fn should_open(&self) -> bool {
         *self.failures.lock().await >= self.threshold
     }
@@ -300,78 +321,80 @@ impl ConsecutiveFailureTracker {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_retry_delay_calculation() {
         let policy = RetryPolicy::default();
-        
+
         // Test exponential backoff
         let delay0 = policy.calculate_delay(0);
         let delay1 = policy.calculate_delay(1);
         let delay2 = policy.calculate_delay(2);
-        
+
         // Each delay should be roughly double the previous (minus jitter)
-        assert!(delay0.as_millis() >= 75);  // 100ms - 25%
+        assert!(delay0.as_millis() >= 75); // 100ms - 25%
         assert!(delay0.as_millis() <= 125); // 100ms + 25%
-        
-        assert!(delay1.as_millis() >= 150);  // 200ms - 25%
+
+        assert!(delay1.as_millis() >= 150); // 200ms - 25%
         assert!(delay1.as_millis() <= 250); // 200ms + 25%
-        
-        assert!(delay2.as_millis() >= 300);  // 400ms - 25%
+
+        assert!(delay2.as_millis() >= 300); // 400ms - 25%
         assert!(delay2.as_millis() <= 500); // 400ms + 25%
     }
-    
+
     #[test]
     fn test_max_delay_cap() {
         let policy = RetryPolicy::default();
-        
+
         // Very high attempt number should cap at max_delay
         let delay = policy.calculate_delay(10);
         assert!(delay.as_millis() <= 6250); // 5000ms + 25%
     }
-    
+
     #[test]
     fn test_should_retry() {
         let policy = RetryPolicy::default();
-        
+
         // Retryable errors
         assert!(policy.should_retry("connection timeout"));
         assert!(policy.should_retry("network error"));
         assert!(policy.should_retry("temporarily unavailable"));
-        
+
         // Non-retryable errors
         assert!(!policy.should_retry("authentication failed"));
         assert!(!policy.should_retry("unauthorized"));
         assert!(!policy.should_retry("invalid request"));
         assert!(!policy.should_retry("malformed JSON"));
     }
-    
+
     #[tokio::test]
     async fn test_circuit_breaker_state_transitions() {
         let breaker = CircuitBreaker::with_config(2, Duration::from_millis(100));
-        
+
         // Initially closed
         assert!(breaker.can_proceed().await);
-        
+
         // First failure - still closed (threshold is 2)
         breaker.record_failure().await;
         assert!(breaker.can_proceed().await);
-        
+
         // Second failure - should open
         breaker.record_failure().await;
         assert!(!breaker.can_proceed().await);
-        
+
         // Wait for recovery timeout
         tokio::time::sleep(Duration::from_millis(150)).await;
-        
+
         // Should transition to half-open
         assert!(breaker.can_proceed().await);
-        
+
         // Success in half-open closes circuit
         breaker.record_success().await;
         assert!(matches!(
             breaker.state().await,
-            CircuitState::Closed { consecutive_failures: 0 }
+            CircuitState::Closed {
+                consecutive_failures: 0
+            }
         ));
     }
 
@@ -387,8 +410,7 @@ mod tests {
             breaker.record_failure().await;
             assert!(
                 breaker.can_proceed().await,
-                "after {} failures (threshold 5) breaker must still be Closed",
-                i
+                "after {i} failures (threshold 5) breaker must still be Closed"
             );
             assert!(
                 matches!(breaker.state().await, CircuitState::Closed { consecutive_failures: c } if c == i),
@@ -398,7 +420,10 @@ mod tests {
 
         // 5th failure crosses threshold — should now Open.
         breaker.record_failure().await;
-        assert!(!breaker.can_proceed().await, "breaker must be Open at threshold");
+        assert!(
+            !breaker.can_proceed().await,
+            "breaker must be Open at threshold"
+        );
         assert!(matches!(breaker.state().await, CircuitState::Open { .. }));
     }
 
@@ -459,13 +484,17 @@ mod tests {
         breaker.record_failure().await;
         assert!(matches!(
             breaker.state().await,
-            CircuitState::Closed { consecutive_failures: 2 }
+            CircuitState::Closed {
+                consecutive_failures: 2
+            }
         ));
 
         breaker.record_success().await;
         assert!(matches!(
             breaker.state().await,
-            CircuitState::Closed { consecutive_failures: 0 }
+            CircuitState::Closed {
+                consecutive_failures: 0
+            }
         ));
     }
 
@@ -476,7 +505,7 @@ mod tests {
         // Record failures
         assert!(!tracker.record_failure().await); // 1
         assert!(!tracker.record_failure().await); // 2
-        assert!(tracker.record_failure().await);  // 3 - threshold reached
+        assert!(tracker.record_failure().await); // 3 - threshold reached
 
         // Success resets counter
         tracker.record_success().await;

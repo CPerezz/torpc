@@ -1,18 +1,18 @@
 //! MEV request handler module
-//! 
+//!
 //! This module provides MEV-aware request handling that integrates
 //! with the proxy module without circular dependency issues.
 
-use std::sync::Arc;
 use axum::{extract::State, Json};
+use std::sync::Arc;
 use tracing::{debug, warn};
 
+use super::client::MevRelayClient;
 use crate::{
     error::{ProxyError, ProxyResult},
-    proxy::{ProxyState, proxy_to_geth},
+    proxy::{proxy_to_geth, ProxyState},
     rpc_types::{JsonRpcRequest, JsonRpcResponse},
 };
-use super::client::MevRelayClient;
 
 /// MEV-aware state wrapper
 pub struct MevProxyState {
@@ -44,21 +44,26 @@ pub async fn handle_flashbots_with_mev(
                     params: None,
                     id: Some(serde_json::json!(1)),
                 };
-                
+
                 let block_resp = proxy_to_geth(&state.base_state, block_req).await?;
-                let block_hex = block_resp.result
+                let block_hex = block_resp
+                    .result
                     .as_ref()
                     .and_then(|v| v.as_str())
-                    .ok_or_else(|| ProxyError::InternalError("Failed to get block number".to_string()))?;
-                
+                    .ok_or_else(|| {
+                        ProxyError::InternalError("Failed to get block number".to_string())
+                    })?;
+
                 let current_block = u64::from_str_radix(block_hex.trim_start_matches("0x"), 16)
-                    .map_err(|e| ProxyError::InternalError(format!("Invalid block number: {}", e)))?;
-                
+                    .map_err(|e| ProxyError::InternalError(format!("Invalid block number: {e}")))?;
+
                 // Submit via MEV client. Logged at debug to keep per-tx
                 // routing decisions out of default operator logs.
                 debug!("Submitting transaction via MEV relay");
-                let bundle_hash = mev_client.handle_send_raw_transaction(&request, current_block).await?;
-                
+                let bundle_hash = mev_client
+                    .handle_send_raw_transaction(&request, current_block)
+                    .await?;
+
                 // Return bundle hash as if it were a transaction hash
                 Ok(Json(JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
@@ -71,7 +76,7 @@ pub async fn handle_flashbots_with_mev(
                 // Direct bundle submission
                 debug!("Submitting bundle via MEV relay");
                 let bundle_hash = mev_client.handle_send_bundle(&request).await?;
-                
+
                 Ok(Json(JsonRpcResponse {
                     jsonrpc: "2.0".to_string(),
                     result: Some(serde_json::json!({

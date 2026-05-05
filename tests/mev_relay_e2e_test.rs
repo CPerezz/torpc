@@ -106,7 +106,10 @@ async fn relay_handler(
     headers: HeaderMap,
     body: String,
 ) -> (StatusCode, axum::Json<Value>) {
-    let header_value = match headers.get("x-flashbots-signature").and_then(|v| v.to_str().ok()) {
+    let header_value = match headers
+        .get("x-flashbots-signature")
+        .and_then(|v| v.to_str().ok())
+    {
         Some(s) => s.to_string(),
         None => {
             state.rejected_calls.fetch_add(1, Ordering::SeqCst);
@@ -156,7 +159,12 @@ async fn relay_handler(
 /// shared counters so tests can assert exact accept/reject counts.
 async fn spawn_mock_relay(
     expected_address: String,
-) -> (String, Arc<AtomicU64>, Arc<AtomicU64>, tokio::task::JoinHandle<()>) {
+) -> (
+    String,
+    Arc<AtomicU64>,
+    Arc<AtomicU64>,
+    tokio::task::JoinHandle<()>,
+) {
     let accepted = Arc::new(AtomicU64::new(0));
     let rejected = Arc::new(AtomicU64::new(0));
     let state = Arc::new(RelayState {
@@ -165,10 +173,12 @@ async fn spawn_mock_relay(
         rejected_calls: rejected.clone(),
     });
 
-    let app = Router::new().route("/", post(relay_handler)).with_state(state);
+    let app = Router::new()
+        .route("/", post(relay_handler))
+        .with_state(state);
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr: SocketAddr = listener.local_addr().unwrap();
-    let url = format!("http://{}", addr);
+    let url = format!("http://{addr}");
 
     let handle = tokio::spawn(async move {
         let _ = axum::serve(listener, app).await;
@@ -270,8 +280,7 @@ async fn daemon_signed_bundle_passes_relay_ecrecover() {
     let returned = body["result"].as_str().expect("result must be a string");
     assert!(
         returned.starts_with("0x") && returned.len() == 66,
-        "daemon must return a real-looking 32-byte bundle hash, got {:?}",
-        returned
+        "daemon must return a real-looking 32-byte bundle hash, got {returned:?}"
     );
     assert_ne!(
         returned, "0x0000000000000000000000000000000000000000000000000000000000000000",
@@ -281,7 +290,11 @@ async fn daemon_signed_bundle_passes_relay_ecrecover() {
 
     // Strict assertion: relay actually accepted exactly one signed bundle.
     assert_eq!(accepted.load(Ordering::SeqCst), 1, "relay must accept once");
-    assert_eq!(rejected.load(Ordering::SeqCst), 0, "relay must not reject any");
+    assert_eq!(
+        rejected.load(Ordering::SeqCst),
+        0,
+        "relay must not reject any"
+    );
     geth_mock.assert_async().await;
 
     relay_handle.abort();
@@ -295,15 +308,20 @@ async fn daemon_signed_bundle_passes_relay_ecrecover() {
 #[tokio::test]
 async fn daemon_signing_with_wrong_key_is_rejected_by_relay() {
     let expected_key = "1111111111111111111111111111111111111111111111111111111111111111";
-    let expected_signer = FlashbotsAuthenticator::new(expected_key).unwrap().address().to_string();
+    let expected_signer = FlashbotsAuthenticator::new(expected_key)
+        .unwrap()
+        .address()
+        .to_string();
 
     // Daemon will sign with key 22…22, which derives a different address.
     let actual_key = "2222222222222222222222222222222222222222222222222222222222222222";
-    let actual_signer = FlashbotsAuthenticator::new(actual_key).unwrap().address().to_string();
+    let actual_signer = FlashbotsAuthenticator::new(actual_key)
+        .unwrap()
+        .address()
+        .to_string();
     assert_ne!(expected_signer, actual_signer, "test setup sanity");
 
-    let (relay_url, accepted, rejected, relay_handle) =
-        spawn_mock_relay(expected_signer).await;
+    let (relay_url, accepted, rejected, relay_handle) = spawn_mock_relay(expected_signer).await;
 
     let mut geth = mockito::Server::new_async().await;
     let _g = geth

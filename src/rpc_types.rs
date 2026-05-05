@@ -116,7 +116,6 @@ mod tests {
         assert_eq!(empty_method.validate(), Err("Method cannot be empty"));
     }
 
-
     #[test]
     fn test_serialization_roundtrip() {
         let request = JsonRpcRequest {

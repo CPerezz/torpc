@@ -5,19 +5,11 @@
 //!
 //! Run as part of `make test` (no services required).
 
-use axum::{
-    extract::DefaultBodyLimit,
-    http::StatusCode,
-    middleware,
-    routing::post,
-    Json, Router,
-};
+use axum::{extract::DefaultBodyLimit, http::StatusCode, middleware, routing::post, Json, Router};
 use axum_test::TestServer;
 use serde_json::{json, Value};
 use std::time::Duration;
-use torpc::security::{
-    json_rpc_timeout_middleware, security_headers_middleware, STATIC_CSP,
-};
+use torpc::security::{json_rpc_timeout_middleware, security_headers_middleware, STATIC_CSP};
 
 /// Tiny mock JSON-RPC handler. Mirrors a minimal subset of the real one so
 /// the security stack has something realistic to wrap.
@@ -29,22 +21,28 @@ async fn mock_rpc(Json(payload): Json<Value>) -> Result<Json<Value>, StatusCode>
         }
         "test_slow_method" => {
             tokio::time::sleep(Duration::from_secs(2)).await;
-            Ok(Json(json!({"jsonrpc": "2.0", "result": "0x1", "id": payload["id"]})))
+            Ok(Json(
+                json!({"jsonrpc": "2.0", "result": "0x1", "id": payload["id"]}),
+            ))
         }
-        _ => Ok(Json(json!({"jsonrpc": "2.0", "result": "0x1", "id": payload["id"]}))),
+        _ => Ok(Json(
+            json!({"jsonrpc": "2.0", "result": "0x1", "id": payload["id"]}),
+        )),
     }
 }
 
 /// Build a router shaped exactly like production except the RPC handler is
 /// the small `mock_rpc` above.
 fn create_secure_test_app(body_limit: usize, timeout: Duration) -> Router {
-    let csp = axum::http::HeaderValue::from_str(STATIC_CSP)
-    .unwrap();
+    let csp = axum::http::HeaderValue::from_str(STATIC_CSP).unwrap();
 
     Router::new()
         .route("/rpc", post(mock_rpc))
         .layer(DefaultBodyLimit::max(body_limit))
-        .layer(middleware::from_fn_with_state(timeout, json_rpc_timeout_middleware))
+        .layer(middleware::from_fn_with_state(
+            timeout,
+            json_rpc_timeout_middleware,
+        ))
         .layer(middleware::from_fn(security_headers_middleware))
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
             axum::http::header::CONTENT_SECURITY_POLICY,
@@ -112,8 +110,11 @@ async fn full_security_flow_oversized_request_returns_413() {
 #[tokio::test]
 async fn full_security_flow_timeout_returns_jsonrpc_504() {
     // Handler sleeps 2s, timeout is 100ms → middleware short-circuits.
-    let server =
-        TestServer::new(create_secure_test_app(512 * 1024, Duration::from_millis(100))).unwrap();
+    let server = TestServer::new(create_secure_test_app(
+        512 * 1024,
+        Duration::from_millis(100),
+    ))
+    .unwrap();
     let response = server
         .post("/rpc")
         .json(&json!({"jsonrpc": "2.0", "method": "test_slow_method", "id": 1}))
@@ -155,6 +156,10 @@ async fn rapid_requests_pass_through_when_under_limits() {
             .post("/rpc")
             .json(&json!({"jsonrpc": "2.0", "method": "eth_blockNumber", "id": i}))
             .await;
-        assert_eq!(response.status_code(), StatusCode::OK, "iteration {} failed", i);
+        assert_eq!(
+            response.status_code(),
+            StatusCode::OK,
+            "iteration {i} failed"
+        );
     }
 }

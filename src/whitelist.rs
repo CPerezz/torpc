@@ -1,10 +1,10 @@
-use std::collections::HashSet;
 use once_cell::sync::Lazy;
+use std::collections::HashSet;
 
 /// List of allowed RPC methods
 static ALLOWED_METHODS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     let mut methods = HashSet::new();
-    
+
     // Read-only methods
     methods.insert("eth_blockNumber");
     methods.insert("eth_getBalance");
@@ -32,20 +32,20 @@ static ALLOWED_METHODS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
     methods.insert("eth_feeHistory");
     methods.insert("eth_maxPriorityFeePerGas");
     methods.insert("eth_getLogs");
-    
+
     // Network info
     methods.insert("net_version");
     methods.insert("net_listening");
     methods.insert("net_peerCount");
-    
+
     // Web3 methods
     methods.insert("web3_clientVersion");
     methods.insert("web3_sha3");
-    
+
     // Write methods we allow
     methods.insert("eth_sendRawTransaction");
     methods.insert("eth_sendBundle"); // Flashbots bundle submission
-    
+
     methods
 });
 

@@ -37,14 +37,17 @@ async fn make_server(geth_url: String, tweak: impl FnOnce(&mut AppConfig)) -> Te
 fn mock_geth_block_number(server: &mut mockito::ServerGuard, value: &str) -> mockito::Mock {
     server
         .mock("POST", "/")
-        .match_header("content-type", mockito::Matcher::Regex("application/json.*".into()))
+        .match_header(
+            "content-type",
+            mockito::Matcher::Regex("application/json.*".into()),
+        )
         .match_body(mockito::Matcher::PartialJson(serde_json::json!({
             "jsonrpc": "2.0",
             "method": "eth_blockNumber",
         })))
         .with_status(200)
         .with_header("content-type", "application/json")
-        .with_body(format!(r#"{{"jsonrpc":"2.0","result":"{}","id":1}}"#, value))
+        .with_body(format!(r#"{{"jsonrpc":"2.0","result":"{value}","id":1}}"#))
         .expect_at_least(1)
         .create()
 }

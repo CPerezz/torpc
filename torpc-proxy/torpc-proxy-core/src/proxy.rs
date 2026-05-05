@@ -117,7 +117,10 @@ impl TorRpcProxy {
             .await
             .with_context(|| format!("Failed to bind {}", self.config.listen_addr))?;
 
-        info!("ToRPC proxy listening on http://{}", self.config.listen_addr);
+        info!(
+            "ToRPC proxy listening on http://{}",
+            self.config.listen_addr
+        );
         info!("Forwarding to {} via Tor", self.config.onion_endpoint);
 
         loop {
@@ -251,8 +254,7 @@ async fn do_proxy(
     let (parts, body) = req.into_parts();
 
     // Connect through the local Tor SOCKS5 proxy to the onion endpoint.
-    let stream = match Socks5Stream::connect(config.tor_proxy, config.onion_endpoint.as_str())
-        .await
+    let stream = match Socks5Stream::connect(config.tor_proxy, config.onion_endpoint.as_str()).await
     {
         Ok(s) => s,
         Err(e) => {
@@ -288,7 +290,9 @@ async fn do_proxy(
         .map(|pq| pq.as_str())
         .unwrap_or("/")
         .to_string();
-    let mut builder = Request::builder().method(parts.method.clone()).uri(path_and_query);
+    let mut builder = Request::builder()
+        .method(parts.method.clone())
+        .uri(path_and_query);
 
     for (name, value) in parts.headers.iter() {
         if name == HOST || is_hop_by_hop(name) || is_wallet_fingerprint(name) {
@@ -355,7 +359,8 @@ async fn do_proxy(
         }
         out = out.header(name, value);
     }
-    Ok(out.body(Full::new(resp_bytes)).context("building outbound response")?)
+    out.body(Full::new(resp_bytes))
+        .context("building outbound response")
 }
 
 fn simple_response(status: StatusCode, msg: &str) -> Response<Full<Bytes>> {
@@ -375,7 +380,7 @@ fn generate_discovery_token() -> String {
     rand::thread_rng().fill_bytes(&mut bytes);
     bytes.iter().fold(String::with_capacity(64), |mut s, b| {
         use std::fmt::Write;
-        let _ = write!(s, "{:02x}", b);
+        let _ = write!(s, "{b:02x}");
         s
     })
 }
@@ -537,11 +542,11 @@ mod tests {
     fn test_hop_by_hop_classification() {
         for h in &["connection", "keep-alive", "transfer-encoding", "upgrade"] {
             let name: HeaderName = h.parse().unwrap();
-            assert!(is_hop_by_hop(&name), "{} should be hop-by-hop", h);
+            assert!(is_hop_by_hop(&name), "{h} should be hop-by-hop");
         }
         for h in &["content-type", "x-flashbots-signature"] {
             let name: HeaderName = h.parse().unwrap();
-            assert!(!is_hop_by_hop(&name), "{} should be end-to-end", h);
+            assert!(!is_hop_by_hop(&name), "{h} should be end-to-end");
         }
     }
 
@@ -568,8 +573,7 @@ mod tests {
             let name: HeaderName = h.to_lowercase().parse().unwrap();
             assert!(
                 is_wallet_fingerprint(&name),
-                "{} must be classified as wallet-fingerprint and stripped",
-                h
+                "{h} must be classified as wallet-fingerprint and stripped"
             );
         }
     }
@@ -587,8 +591,7 @@ mod tests {
             let name: HeaderName = h.parse().unwrap();
             assert!(
                 !is_wallet_fingerprint(&name),
-                "{} must not be classified as wallet-fingerprint",
-                h
+                "{h} must not be classified as wallet-fingerprint"
             );
         }
     }
@@ -602,9 +605,7 @@ mod tests {
         for forbidden in &["MetaMask", "Coinbase", "Mozilla", "Chrome", "Tauri"] {
             assert!(
                 !s.contains(forbidden),
-                "synthetic UA should not contain {}: {}",
-                forbidden,
-                s
+                "synthetic UA should not contain {forbidden}: {s}"
             );
         }
     }

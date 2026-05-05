@@ -82,26 +82,22 @@ fn assert_security_headers(response: &axum_test::TestResponse) {
         .to_string();
     assert!(
         csp.contains("default-src 'self'"),
-        "CSP should be `'self'`-based: {}",
-        csp
+        "CSP should be `'self'`-based: {csp}"
     );
     assert!(
         csp.contains("frame-ancestors 'none'"),
-        "CSP must keep frame-ancestors locked down: {}",
-        csp
+        "CSP must keep frame-ancestors locked down: {csp}"
     );
     // After RuntimeWebConfig deletion, CSP no longer includes the
     // discovery URL — `connect-src 'self'` covers same-origin /rpc,
     // and the discovery server is itself default-disabled.
     assert!(
         csp.contains("connect-src 'self'"),
-        "CSP must allow same-origin connect: {}",
-        csp
+        "CSP must allow same-origin connect: {csp}"
     );
     assert!(
         !csp.contains("http://localhost:8081"),
-        "CSP must NOT hardcode the discovery URL after the RuntimeWebConfig removal: {}",
-        csp
+        "CSP must NOT hardcode the discovery URL after the RuntimeWebConfig removal: {csp}"
     );
 }
 
@@ -174,19 +170,27 @@ async fn csp_disallows_remote_scripts_and_inline_default() {
     // `*` source lists, or remote script-src origins.
     let server = TestServer::new(create_test_router()).unwrap();
     let response = server.get("/text").await;
-    let csp = response.header("content-security-policy").to_str().unwrap().to_string();
+    let csp = response
+        .header("content-security-policy")
+        .to_str()
+        .unwrap()
+        .to_string();
 
-    assert!(!csp.contains("'unsafe-eval'"), "CSP leaks unsafe-eval: {}", csp);
-    assert!(!csp.contains("script-src 'self' *"), "CSP wildcards scripts: {}", csp);
+    assert!(
+        !csp.contains("'unsafe-eval'"),
+        "CSP leaks unsafe-eval: {csp}"
+    );
+    assert!(
+        !csp.contains("script-src 'self' *"),
+        "CSP wildcards scripts: {csp}"
+    );
     assert!(
         csp.contains("script-src 'self'"),
-        "CSP must restrict scripts to self: {}",
-        csp
+        "CSP must restrict scripts to self: {csp}"
     );
     assert!(
         csp.contains("img-src 'self' data:"),
-        "CSP must allow data: images for inline icons: {}",
-        csp
+        "CSP must allow data: images for inline icons: {csp}"
     );
 }
 

@@ -74,20 +74,22 @@ async fn main() -> anyhow::Result<()> {
         // which makes accidental disclosure surprisingly easy. Keep it
         // behind RUST_LOG=debug; operators who want it can `cat
         // data/tor/torpc/hostname`.
-        Ok(Some(_)) => debug!("Tor hidden service hostname resolved (cat data/tor/torpc/hostname to view)"),
+        Ok(Some(_)) => {
+            debug!("Tor hidden service hostname resolved (cat data/tor/torpc/hostname to view)")
+        }
         Ok(None) => info!("Tor is configured but not running yet"),
         Err(e) => warn!("Could not read Tor hostname: {}", e),
     }
 
     let addr: SocketAddr = bind_addr
         .parse()
-        .with_context(|| format!("invalid BIND_ADDR: {}", bind_addr))?;
+        .with_context(|| format!("invalid BIND_ADDR: {bind_addr}"))?;
     info!("Server listening on {}", addr);
     info!("Access the web interface at http://{}", addr);
 
     let listener = tokio::net::TcpListener::bind(addr)
         .await
-        .with_context(|| format!("failed to bind {}", addr))?;
+        .with_context(|| format!("failed to bind {addr}"))?;
 
     axum::serve(
         listener,
