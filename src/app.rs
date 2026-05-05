@@ -31,8 +31,8 @@ use crate::mev::{create_mev_client, MevConfig};
 use crate::proxy::{self, handle_rpc, ProxyState};
 use crate::rate_limit::{rate_limit_middleware, RateLimitConfig, RateLimiter};
 use crate::security::{
-    config_js, health_check, json_rpc_timeout_middleware, monitor_request_patterns,
-    security_headers_middleware, security_metrics, RuntimeWebConfig, SecurityConfig,
+    config_js, health_check, json_rpc_timeout_middleware, security_headers_middleware,
+    security_metrics, RuntimeWebConfig, SecurityConfig,
 };
 
 /// All operator-configurable knobs the daemon needs at startup. Construct
@@ -274,7 +274,6 @@ pub async fn build_app(config: AppConfig) -> anyhow::Result<BuiltApp> {
         .with_state(mev_state)
         .layer(ConcurrencyLimitLayer::new(config.max_concurrent))
         .layer(DefaultBodyLimit::max(config.security.max_body_size))
-        .layer(middleware::from_fn(monitor_request_patterns))
         .layer(middleware::from_fn_with_state(
             config.security.request_timeout,
             json_rpc_timeout_middleware,

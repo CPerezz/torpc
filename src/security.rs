@@ -4,57 +4,9 @@ use axum::{
     middleware::Next,
     response::{IntoResponse, Response},
 };
-use once_cell::sync::Lazy;
 use serde_json::json;
-use std::collections::HashSet;
-use std::time::{Duration, Instant};
-use tower::ServiceBuilder;
-use tower_http::timeout::TimeoutLayer;
-use tracing::{debug, info, warn};
-
-/// Set of JSON-RPC methods we expect to see. Used by `RequestPatternAnalyzer`
-/// to flag suspicious or unknown methods. Kept in sync with `whitelist.rs` —
-/// see Phase 2 follow-ups for sharing this list authoritatively.
-static KNOWN_METHODS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
-    [
-        "eth_blockNumber",
-        "eth_getBalance",
-        "eth_getStorageAt",
-        "eth_getTransactionCount",
-        "eth_getBlockTransactionCountByHash",
-        "eth_getBlockTransactionCountByNumber",
-        "eth_getCode",
-        "eth_call",
-        "eth_estimateGas",
-        "eth_getBlockByHash",
-        "eth_getBlockByNumber",
-        "eth_getTransactionByHash",
-        "eth_getTransactionByBlockHashAndIndex",
-        "eth_getTransactionByBlockNumberAndIndex",
-        "eth_getTransactionReceipt",
-        "eth_getUncleByBlockHashAndIndex",
-        "eth_getUncleByBlockNumberAndIndex",
-        "eth_getUncleCountByBlockHash",
-        "eth_getUncleCountByBlockNumber",
-        "eth_protocolVersion",
-        "eth_chainId",
-        "eth_syncing",
-        "eth_gasPrice",
-        "eth_feeHistory",
-        "eth_maxPriorityFeePerGas",
-        "net_version",
-        "net_listening",
-        "net_peerCount",
-        "web3_clientVersion",
-        "web3_sha3",
-        "eth_sendRawTransaction",
-        "eth_sendBundle",
-        "eth_getLogs",
-    ]
-    .iter()
-    .copied()
-    .collect()
-});
+use std::time::Duration;
+use tracing::warn;
 
 /// Security configuration
 #[derive(Debug, Clone)]
@@ -193,155 +145,6 @@ impl SecurityMetrics {
     }
 }
 
-/// Security event types for structured logging
-#[derive(Debug, Clone)]
-pub enum SecurityEventType {
-    BlockedMethod,
-    RateLimitExceeded,
-    OversizedRequest,
-    SuspiciousPattern,
-    InvalidRequest,
-}
-
-/// Security event for logging
-#[derive(Debug, Clone)]
-pub struct SecurityEvent {
-    pub event_type: SecurityEventType,
-    pub method: Option<String>,
-    pub size: Option<usize>,
-    pub user_agent: Option<String>,
-    pub timestamp: Instant,
-    pub message: String,
-}
-
-impl SecurityEvent {
-    pub fn new(event_type: SecurityEventType, message: String) -> Self {
-        Self {
-            event_type,
-            method: None,
-            size: None,
-            user_agent: None,
-            timestamp: Instant::now(),
-            message,
-        }
-    }
-
-    pub fn with_method(mut self, method: String) -> Self {
-        self.method = Some(method);
-        self
-    }
-
-    pub fn with_size(mut self, size: usize) -> Self {
-        self.size = Some(size);
-        self
-    }
-
-    pub fn with_user_agent(mut self, user_agent: String) -> Self {
-        self.user_agent = Some(user_agent);
-        self
-    }
-
-    pub fn log(&self) {
-        let event_data = json!({
-            "event_type": format!("{:?}", self.event_type),
-            "method": self.method,
-            "size": self.size,
-            "user_agent": self.user_agent,
-            "timestamp": format!("{:?}", self.timestamp.elapsed()),
-            "message": self.message
-        });
-
-        match self.event_type {
-            SecurityEventType::SuspiciousPattern => {
-                warn!(security_event = %event_data, "Security event detected");
-            },
-            SecurityEventType::RateLimitExceeded => {
-                info!(security_event = %event_data, "Rate limit exceeded");
-            },
-            _ => {
-                debug!(security_event = %event_data, "Security event");
-            }
-        }
-    }
-}
-
-/// Request pattern analyzer for detecting suspicious behavior. Currently
-/// only exercised by the unit tests; Phase 2 will wire this into
-/// `proxy::handle_rpc` where the JSON-RPC method is actually known so the
-/// `SuspiciousPattern` events fire on real method names rather than the
-/// literal `"unknown"` placeholder the old middleware emitted.
-#[allow(dead_code)]
-#[derive(Debug, Clone)]
-pub struct RequestPatternAnalyzer {
-    max_request_size: usize,
-}
-
-impl RequestPatternAnalyzer {
-    pub fn new(max_request_size: usize) -> Self {
-        Self { max_request_size }
-    }
-
-    pub fn analyze_request(&self, method: &str, size: usize, user_agent: Option<&str>) -> Vec<SecurityEvent> {
-        let mut events = Vec::new();
-
-        // Check for oversized requests
-        if size > self.max_request_size {
-            let event = SecurityEvent::new(
-                SecurityEventType::OversizedRequest,
-                format!("Request size {} exceeds limit {}", size, self.max_request_size)
-            )
-            .with_method(method.to_string())
-            .with_size(size);
-            
-            if let Some(ua) = user_agent {
-                events.push(event.with_user_agent(ua.to_string()));
-            } else {
-                events.push(event);
-            }
-        }
-
-        // Check for unknown methods
-        if !KNOWN_METHODS.contains(method) {
-            let event = SecurityEvent::new(
-                SecurityEventType::SuspiciousPattern,
-                format!("Unknown RPC method: {}", method)
-            )
-            .with_method(method.to_string());
-            
-            if let Some(ua) = user_agent {
-                events.push(event.with_user_agent(ua.to_string()));
-            } else {
-                events.push(event);
-            }
-        }
-
-        // Check for suspicious user agents (basic patterns)
-        if let Some(ua) = user_agent {
-            let suspicious_patterns = [
-                "bot", "crawler", "spider", "scraper", "scanner",
-                "nmap", "masscan", "zmap", "nuclei", "sqlmap"
-            ];
-            
-            let ua_lower = ua.to_lowercase();
-            for pattern in &suspicious_patterns {
-                if ua_lower.contains(pattern) {
-                    let event = SecurityEvent::new(
-                        SecurityEventType::SuspiciousPattern,
-                        format!("Suspicious user agent detected: {}", ua)
-                    )
-                    .with_method(method.to_string())
-                    .with_user_agent(ua.to_string());
-                    
-                    events.push(event);
-                    break;
-                }
-            }
-        }
-
-        events
-    }
-}
-
 /// Add security headers to all responses.
 ///
 /// Note: the `Content-Security-Policy` is **not** set here. It depends on
@@ -367,49 +170,6 @@ pub async fn add_security_headers(request: Request, next: Next) -> Response {
     headers.remove("Server");
     headers.insert("X-Service", HeaderValue::from_static("TorPC"));
     
-    response
-}
-
-/// Request size and pattern monitoring middleware
-pub async fn monitor_request_patterns(request: Request, next: Next) -> Response {
-    let method = request.method().clone();
-    let uri = request.uri().clone();
-    let headers = request.headers().clone();
-    let user_agent = headers.get("user-agent")
-        .and_then(|h| h.to_str().ok())
-        .map(|s| s.to_string());
-
-    // Estimate request size (headers + body size if available)
-    let content_length = headers.get("content-length")
-        .and_then(|h| h.to_str().ok())
-        .and_then(|s| s.parse::<usize>().ok())
-        .unwrap_or(0);
-    
-    let estimated_size = headers.iter()
-        .map(|(name, value)| name.as_str().len() + value.len())
-        .sum::<usize>() + content_length;
-
-    debug!(
-        method = %method,
-        uri = %uri,
-        size = estimated_size,
-        user_agent = user_agent.as_deref().unwrap_or("none"),
-        "Request received"
-    );
-
-    // Method-level analysis happens in `handle_rpc` after the JSON body is parsed.
-    // Calling `analyze_request("unknown", …)` here would flag every request as a
-    // suspicious method, drowning the log in false positives.
-
-    let response = next.run(request).await;
-
-    debug!(
-        method = %method,
-        uri = %uri,
-        status = %response.status(),
-        "Request completed"
-    );
-
     response
 }
 
@@ -559,20 +319,6 @@ pub async fn config_js(
     )
 }
 
-/// Build security layers for the application.
-///
-/// Kept for backwards compatibility with tests; new code should prefer
-/// `json_rpc_timeout_middleware` (registered via `from_fn_with_state`)
-/// because the bare `TimeoutLayer` returns an empty `408 Request Timeout`
-/// body, which JSON-RPC clients interpret as a parse error rather than a
-/// proper upstream-timeout signal. Wallets show "invalid response" instead
-/// of the helpful `-32001` error code the new middleware emits.
-pub fn build_security_layers(
-    config: SecurityConfig,
-) -> ServiceBuilder<tower::layer::util::Stack<TimeoutLayer, tower::layer::util::Identity>> {
-    ServiceBuilder::new().layer(TimeoutLayer::new(config.request_timeout))
-}
-
 /// Replacement for `tower_http::TimeoutLayer` that emits a JSON-RPC 2.0
 /// error body on timeout (`-32001 "upstream timeout"`) so wallet clients
 /// see structured JSON instead of an empty `408`. Use by passing the
@@ -621,59 +367,6 @@ pub async fn security_headers_middleware(request: Request, next: Next) -> Respon
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_request_pattern_analyzer() {
-        let analyzer = RequestPatternAnalyzer::new(1024);
-
-        // Test oversized request
-        let events = analyzer.analyze_request("eth_blockNumber", 2048, None);
-        assert!(!events.is_empty());
-        assert!(matches!(events[0].event_type, SecurityEventType::OversizedRequest));
-
-        // Test unknown method
-        let events = analyzer.analyze_request("unknown_method", 512, None);
-        assert!(!events.is_empty());
-        assert!(matches!(events[0].event_type, SecurityEventType::SuspiciousPattern));
-
-        // Test suspicious user agent
-        let events = analyzer.analyze_request("eth_blockNumber", 512, Some("malicious-bot/1.0"));
-        assert!(!events.is_empty());
-        assert!(matches!(events[0].event_type, SecurityEventType::SuspiciousPattern));
-
-        // Test normal request
-        let events = analyzer.analyze_request("eth_blockNumber", 512, Some("Mozilla/5.0"));
-        assert!(events.is_empty());
-    }
-
-    #[test]
-    fn test_request_pattern_analyzer_edge_cases() {
-        let analyzer = RequestPatternAnalyzer::new(1000);
-
-        // Test exactly at size limit
-        let events = analyzer.analyze_request("eth_blockNumber", 1000, None);
-        assert!(events.is_empty());
-
-        // Test one byte over limit
-        let events = analyzer.analyze_request("eth_blockNumber", 1001, None);
-        assert!(!events.is_empty());
-        assert!(matches!(events[0].event_type, SecurityEventType::OversizedRequest));
-
-        // Test multiple suspicious patterns (should only create one event)
-        let events = analyzer.analyze_request("unknown_method", 512, Some("nmap-scanner"));
-        assert_eq!(events.len(), 2); // One for unknown method, one for suspicious UA
-
-        // Test all known methods are not flagged
-        let known_methods = [
-            "eth_blockNumber", "eth_getBalance", "eth_call", "eth_sendRawTransaction", 
-            "eth_sendBundle", "net_version", "web3_clientVersion"
-        ];
-        
-        for method in &known_methods {
-            let events = analyzer.analyze_request(method, 512, Some("Mozilla/5.0"));
-            assert!(events.is_empty(), "Method {} should not be flagged as suspicious", method);
-        }
-    }
 
     #[test]
     fn test_security_metrics() {
@@ -823,37 +516,6 @@ mod tests {
     }
 
     #[test]
-    fn test_security_event() {
-        let event = SecurityEvent::new(
-            SecurityEventType::BlockedMethod,
-            "Test message".to_string()
-        )
-        .with_method("test_method".to_string())
-        .with_size(1024);
-
-        assert!(matches!(event.event_type, SecurityEventType::BlockedMethod));
-        assert_eq!(event.method, Some("test_method".to_string()));
-        assert_eq!(event.size, Some(1024));
-        assert_eq!(event.message, "Test message");
-    }
-
-    #[test]
-    fn test_security_event_builder_pattern() {
-        let event = SecurityEvent::new(
-            SecurityEventType::SuspiciousPattern,
-            "Suspicious activity detected".to_string()
-        )
-        .with_method("unknown_method".to_string())
-        .with_size(2048)
-        .with_user_agent("malicious-bot/1.0".to_string());
-
-        assert_eq!(event.method, Some("unknown_method".to_string()));
-        assert_eq!(event.size, Some(2048));
-        assert_eq!(event.user_agent, Some("malicious-bot/1.0".to_string()));
-        assert_eq!(event.message, "Suspicious activity detected");
-    }
-
-    #[test]
     fn test_security_config_defaults() {
         let config = SecurityConfig::default();
         assert_eq!(config.max_body_size, 1024 * 1024); // 1MB
@@ -893,52 +555,6 @@ mod tests {
         std::env::remove_var("STRICT_HEADERS");
     }
 
-    // Note: Direct testing of add_security_headers requires mocking Next 
+    // Note: Direct testing of add_security_headers requires mocking Next
     // which is complex. These are tested in integration tests instead.
-
-    #[test]
-    fn test_build_security_layers() {
-        let config = SecurityConfig {
-            max_body_size: 1024 * 1024,
-            request_timeout: Duration::from_secs(30),
-            strict_headers: true,
-        };
-
-        // Test that the function returns without panicking
-        let _layers = build_security_layers(config);
-        // The actual functionality is tested in integration tests
-    }
-
-    #[test]
-    fn test_suspicious_user_agent_patterns() {
-        let analyzer = RequestPatternAnalyzer::new(1024);
-        
-        let suspicious_agents = [
-            "nmap-scanner", "masscan-probe", "nuclei/v1.0", "sqlmap/1.0",
-            "some-bot-scanner", "web-crawler/2.0", "spider-tool", "scraper-v3"
-        ];
-        
-        for agent in &suspicious_agents {
-            let events = analyzer.analyze_request("eth_blockNumber", 500, Some(agent));
-            assert!(!events.is_empty(), "User agent '{}' should be flagged as suspicious", agent);
-            assert!(matches!(events[0].event_type, SecurityEventType::SuspiciousPattern));
-        }
-        
-        let legitimate_agents = [
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "curl/7.68.0",
-            "PostmanRuntime/7.26.8",
-            "axios/0.21.1",
-            "okhttp/4.9.0"
-        ];
-        
-        for agent in &legitimate_agents {
-            let events = analyzer.analyze_request("eth_blockNumber", 500, Some(agent));
-            // Should only be empty or contain non-suspicious events
-            for event in &events {
-                assert!(!matches!(event.event_type, SecurityEventType::SuspiciousPattern), 
-                       "User agent '{}' should not be flagged as suspicious", agent);
-            }
-        }
-    }
 }

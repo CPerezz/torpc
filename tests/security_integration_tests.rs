@@ -26,10 +26,7 @@ use std::time::Duration;
 use torpc::{
     mev::mev_handler::MevProxyState,
     proxy::{handle_rpc, ProxyState},
-    security::{
-        health_check, monitor_request_patterns, security_headers_middleware, security_metrics,
-        RuntimeWebConfig,
-    },
+    security::{health_check, security_headers_middleware, security_metrics, RuntimeWebConfig},
 };
 
 /// Builds a router that mirrors `main.rs`'s wiring of all security
@@ -74,7 +71,6 @@ fn build_router(geth_url: String, max_body_size: usize, write_limit: u32) -> Rou
         )
         .with_state(mev_state)
         .layer(DefaultBodyLimit::max(max_body_size))
-        .layer(middleware::from_fn(monitor_request_patterns))
         .layer(middleware::from_fn(security_headers_middleware))
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
             axum::http::header::CONTENT_SECURITY_POLICY,

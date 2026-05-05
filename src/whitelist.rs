@@ -54,13 +54,6 @@ pub fn is_method_allowed(method: &str) -> bool {
     ALLOWED_METHODS.contains(method)
 }
 
-/// Get a list of all allowed methods (for documentation)
-pub fn get_allowed_methods() -> Vec<&'static str> {
-    let mut methods: Vec<_> = ALLOWED_METHODS.iter().copied().collect();
-    methods.sort();
-    methods
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -105,24 +98,6 @@ mod tests {
         assert!(is_method_allowed("eth_blockNumber"));
         assert!(!is_method_allowed("ETH_BLOCKNUMBER"));
         assert!(!is_method_allowed("Eth_BlockNumber"));
-    }
-
-    #[test]
-    fn test_get_allowed_methods_sorted() {
-        let methods = get_allowed_methods();
-        
-        // Check it's sorted
-        let mut sorted = methods.clone();
-        sorted.sort();
-        assert_eq!(methods, sorted);
-        
-        // Check it contains expected methods
-        assert!(methods.contains(&"eth_blockNumber"));
-        assert!(methods.contains(&"eth_sendRawTransaction"));
-        
-        // Check count is reasonable
-        assert!(methods.len() > 20); // We have many read methods
-        assert!(methods.len() < 50); // But not too many
     }
 
     #[test]

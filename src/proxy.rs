@@ -10,7 +10,7 @@ use crate::{
     mev::retry::CircuitBreaker,
     rate_limit::{RateLimitConfig, RateLimiter},
     rpc_types::{JsonRpcRequest, JsonRpcResponse},
-    security::{SecurityEvent, SecurityEventType, SecurityMetrics},
+    security::SecurityMetrics,
     whitelist::is_method_allowed,
 };
 
@@ -214,20 +214,16 @@ pub async fn handle_rpc(
     
     // Check if method is allowed
     if !is_method_allowed(&request.method) {
-        warn!("Blocked disallowed method: {}", request.method);
-
-        // Increment live counters surfaced by `/metrics`.
         state.metrics.increment_invalid_methods();
         state.metrics.increment_blocked_requests();
-
-        // Log security event
-        let event = SecurityEvent::new(
-            SecurityEventType::BlockedMethod,
-            format!("Blocked disallowed method: {}", request.method),
-        )
-        .with_method(request.method.clone());
-        event.log();
-
+        // Structured warn — replaces the prior `SecurityEvent` envelope.
+        // SIEM-style ingestion can pick the `event_type` and `method` fields
+        // out of the JSON tracing output without a typed enum.
+        warn!(
+            event_type = "blocked_method",
+            method = %request.method,
+            "blocked disallowed JSON-RPC method"
+        );
         return Err(ProxyError::MethodNotAllowed(request.method.clone()));
     }
 
@@ -251,18 +247,16 @@ pub async fn handle_flashbots(
     
     // Check if method is allowed
     if !is_method_allowed(&request.method) {
-        warn!("Blocked disallowed method: {}", request.method);
-
         state.metrics.increment_invalid_methods();
         state.metrics.increment_blocked_requests();
-
-        let event = SecurityEvent::new(
-            SecurityEventType::BlockedMethod,
-            format!("Blocked disallowed method: {}", request.method),
-        )
-        .with_method(request.method.clone());
-        event.log();
-
+        // Structured warn — replaces the prior `SecurityEvent` envelope.
+        // SIEM-style ingestion can pick the `event_type` and `method` fields
+        // out of the JSON tracing output without a typed enum.
+        warn!(
+            event_type = "blocked_method",
+            method = %request.method,
+            "blocked disallowed JSON-RPC method"
+        );
         return Err(ProxyError::MethodNotAllowed(request.method.clone()));
     }
 

@@ -9,7 +9,9 @@ use axum_test::TestServer;
 use serde_json::{json, Value};
 use std::time::Duration;
 use tokio::time::sleep;
-use torpc::security::{SecurityConfig, build_security_layers, security_headers_middleware};
+use torpc::security::{
+    json_rpc_timeout_middleware, security_headers_middleware, SecurityConfig,
+};
 
 // Test handler that echoes back the request
 async fn echo_handler(Json(payload): Json<Value>) -> Json<Value> {
@@ -37,11 +39,18 @@ fn create_test_router_with_limits(max_body_size: usize, timeout_secs: u64) -> Ro
         strict_headers: true,
     };
 
+    // Phase-Option-C swap: the deprecated `build_security_layers` returned a
+    // bare `tower-http::TimeoutLayer` (empty 408). The new
+    // `json_rpc_timeout_middleware` produces a JSON-RPC `-32001` body on
+    // timeout; same timeout knob, structured error.
     Router::new()
         .route("/echo", post(echo_handler))
         .route("/slow", post(slow_handler))
         .route("/delay", post(configurable_delay_handler))
-        .layer(build_security_layers(security_config.clone()))
+        .layer(middleware::from_fn_with_state(
+            security_config.request_timeout,
+            json_rpc_timeout_middleware,
+        ))
         .layer(DefaultBodyLimit::max(security_config.max_body_size))
         .layer(middleware::from_fn(security_headers_middleware))
 }
@@ -175,9 +184,13 @@ async fn test_request_timeout_over_limit() {
         .post("/delay")
         .json(&payload)
         .await;
-    
-    // Should timeout and return 408 Request Timeout
-    assert_eq!(response.status_code(), StatusCode::REQUEST_TIMEOUT);
+
+    // The new JSON-RPC timeout middleware returns 504 (gateway timeout)
+    // with a `-32001` body — the prior bare `tower-http::TimeoutLayer`
+    // returned an empty 408. Wallets parse the body now; check both.
+    assert_eq!(response.status_code(), StatusCode::GATEWAY_TIMEOUT);
+    let body: Value = response.json();
+    assert_eq!(body["error"]["code"], -32001);
 }
 
 #[tokio::test]
@@ -215,12 +228,12 @@ async fn test_multiple_size_limits() {
 
 #[tokio::test]
 async fn test_multiple_timeout_limits() {
-    // Test different timeout limits
+    // Test different timeout limits. New middleware returns 504, not 408.
     let test_cases = vec![
         (5, 2000, StatusCode::OK),                    // 2s delay with 5s limit
-        (5, 8000, StatusCode::REQUEST_TIMEOUT),       // 8s delay with 5s limit
+        (5, 8000, StatusCode::GATEWAY_TIMEOUT),       // 8s delay with 5s limit
         (10, 5000, StatusCode::OK),                   // 5s delay with 10s limit
-        (1, 2000, StatusCode::REQUEST_TIMEOUT),       // 2s delay with 1s limit
+        (1, 2000, StatusCode::GATEWAY_TIMEOUT),       // 2s delay with 1s limit
     ];
     
     for (timeout_secs, delay_ms, expected_status) in test_cases {
@@ -283,9 +296,9 @@ async fn test_security_headers_on_timeout_error() {
         .post("/delay")
         .json(&payload)
         .await;
-    
-    assert_eq!(response.status_code(), StatusCode::REQUEST_TIMEOUT);
-    
+
+    assert_eq!(response.status_code(), StatusCode::GATEWAY_TIMEOUT);
+
     // Verify security headers are present even on timeout
     assert_eq!(response.header("X-Content-Type-Options"), "nosniff");
     assert_eq!(response.header("X-Frame-Options"), "DENY");
