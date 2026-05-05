@@ -155,40 +155,35 @@ pub struct CircuitBreaker {
 }
 
 impl CircuitBreaker {
-    /// Create a new circuit breaker with default settings
+    /// Create a new circuit breaker with default settings (threshold 5, recovery 30s).
     pub fn new() -> Self {
-        Self {
-            state: Arc::new(Mutex::new(CircuitState::Closed)),
-            failure_threshold: 5,
-            recovery_timeout: Duration::from_secs(30),
-        }
+        Self::with_config(5, Duration::from_secs(30))
     }
-    
-    /// Create a circuit breaker with custom settings
-    /// 
+
+    /// Create a circuit breaker with custom settings.
+    ///
     /// # Arguments
-    /// * `failure_threshold` - Failures before opening circuit
-    /// * `recovery_timeout` - Time to wait before half-open
+    /// * `failure_threshold` - Consecutive failures required to open the circuit.
+    /// * `recovery_timeout` - How long to remain Open before lazily flipping to HalfOpen.
     pub fn with_config(failure_threshold: u32, recovery_timeout: Duration) -> Self {
         Self {
-            state: Arc::new(Mutex::new(CircuitState::Closed)),
+            state: Arc::new(Mutex::new(CircuitState::Closed { consecutive_failures: 0 })),
             failure_threshold,
             recovery_timeout,
         }
     }
-    
-    /// Check if a request should be allowed to proceed
-    /// 
-    /// # Returns
-    /// * `true` - Request can proceed
-    /// * `false` - Circuit is open, fail fast
+
+    /// Check if a request should be allowed to proceed.
+    ///
+    /// Lazily transitions Open → HalfOpen once `recovery_timeout` has elapsed,
+    /// permitting exactly one probe request before the next failure reopens the
+    /// circuit or success closes it.
     pub async fn can_proceed(&self) -> bool {
         let mut state = self.state.lock().await;
-        
-        match &*state {
-            CircuitState::Closed => true,
-            CircuitState::Open { opened_at, .. } => {
-                // Check if recovery timeout has elapsed
+
+        match *state {
+            CircuitState::Closed { .. } => true,
+            CircuitState::Open { opened_at } => {
                 if opened_at.elapsed() >= self.recovery_timeout {
                     debug!("Circuit breaker transitioning to half-open");
                     *state = CircuitState::HalfOpen;
@@ -200,70 +195,72 @@ impl CircuitBreaker {
             CircuitState::HalfOpen => true,
         }
     }
-    
-    /// Record a successful request
-    /// 
-    /// Resets failure count and closes circuit if half-open
+
+    /// Record a successful request. Resets the consecutive-failure counter and,
+    /// from HalfOpen, closes the circuit fully.
     pub async fn record_success(&self) {
         let mut state = self.state.lock().await;
-        
-        match &*state {
+
+        match *state {
             CircuitState::HalfOpen => {
                 debug!("Circuit breaker closing after successful recovery");
-                *state = CircuitState::Closed;
+                *state = CircuitState::Closed { consecutive_failures: 0 };
             }
-            _ => {
-                // Success in closed state maintains closed
-                *state = CircuitState::Closed;
+            // From Closed{n}, success resets the counter — we count *consecutive*
+            // failures, so a single success is enough to wipe the slate.
+            CircuitState::Closed { .. } => {
+                *state = CircuitState::Closed { consecutive_failures: 0 };
             }
+            // From Open we shouldn't normally see successes (can_proceed gates them
+            // off), but if one slips through (a request started before the breaker
+            // opened), be conservative and leave the breaker Open until recovery
+            // timeout elapses.
+            CircuitState::Open { .. } => {}
         }
     }
-    
-    /// Record a failed request
-    /// 
-    /// May trigger circuit opening if threshold is reached
+
+    /// Record a failed request. Crosses the threshold from Closed{threshold-1}
+    /// to Open atomically. From HalfOpen any failure reopens the circuit.
     pub async fn record_failure(&self) {
         let mut state = self.state.lock().await;
-        
-        match &*state {
-            CircuitState::Closed => {
-                // First failure, start counting
-                *state = CircuitState::Open {
-                    opened_at: Instant::now(),
-                    failure_count: 1,
-                };
-                
-                // If we haven't reached threshold, immediately close again
-                if 1 < self.failure_threshold {
-                    *state = CircuitState::Closed;
+
+        match *state {
+            CircuitState::Closed { consecutive_failures } => {
+                let next = consecutive_failures + 1;
+                if next >= self.failure_threshold {
+                    warn!("Circuit breaker opened after {} consecutive failures", next);
+                    *state = CircuitState::Open { opened_at: Instant::now() };
                 } else {
-                    warn!("Circuit breaker opened after {} failures", 1);
-                }
-            }
-            CircuitState::Open { opened_at, failure_count } => {
-                let new_count = failure_count + 1;
-                if new_count >= self.failure_threshold && opened_at.elapsed() < Duration::from_secs(1) {
-                    // Keep open with updated count
-                    *state = CircuitState::Open {
-                        opened_at: *opened_at,
-                        failure_count: new_count,
-                    };
+                    *state = CircuitState::Closed { consecutive_failures: next };
                 }
             }
             CircuitState::HalfOpen => {
-                // Failed during recovery, reopen
                 warn!("Circuit breaker reopening after failed recovery attempt");
-                *state = CircuitState::Open {
-                    opened_at: Instant::now(),
-                    failure_count: self.failure_threshold,
-                };
+                *state = CircuitState::Open { opened_at: Instant::now() };
             }
+            // Already Open — additional failures don't change the open timestamp;
+            // the recovery timeout still measures from when we first opened.
+            CircuitState::Open { .. } => {}
         }
     }
-    
-    /// Get current circuit state (for monitoring)
+
+    /// Get current circuit state (clone of the inner state).
     pub async fn state(&self) -> CircuitState {
         self.state.lock().await.clone()
+    }
+
+    /// Non-blocking summary of the current state, suitable for `/health`.
+    /// Returns `"unknown"` if the inner mutex is contended rather than
+    /// blocking the health probe.
+    pub fn state_summary(&self) -> &'static str {
+        match self.state.try_lock() {
+            Ok(guard) => match *guard {
+                CircuitState::Closed { .. } => "closed",
+                CircuitState::Open { .. } => "open",
+                CircuitState::HalfOpen => "half_open",
+            },
+            Err(_) => "unknown",
+        }
     }
 }
 
@@ -374,19 +371,113 @@ mod tests {
         breaker.record_success().await;
         assert!(matches!(
             breaker.state().await,
-            CircuitState::Closed
+            CircuitState::Closed { consecutive_failures: 0 }
         ));
     }
-    
+
+    /// Regression test for the threshold-vs-tracking bug. With threshold N,
+    /// the breaker must NOT open before N consecutive failures and MUST be
+    /// open exactly when count >= N. Run with N=5 (the production default)
+    /// to catch any off-by-one in the boundary condition.
+    #[tokio::test]
+    async fn test_circuit_breaker_opens_exactly_at_threshold() {
+        let breaker = CircuitBreaker::with_config(5, Duration::from_secs(60));
+
+        for i in 1..5 {
+            breaker.record_failure().await;
+            assert!(
+                breaker.can_proceed().await,
+                "after {} failures (threshold 5) breaker must still be Closed",
+                i
+            );
+            assert!(
+                matches!(breaker.state().await, CircuitState::Closed { consecutive_failures: c } if c == i),
+                "Closed counter should track exactly i failures"
+            );
+        }
+
+        // 5th failure crosses threshold — should now Open.
+        breaker.record_failure().await;
+        assert!(!breaker.can_proceed().await, "breaker must be Open at threshold");
+        assert!(matches!(breaker.state().await, CircuitState::Open { .. }));
+    }
+
+    /// Concurrent failures from many tasks must still result in the breaker
+    /// opening exactly once when the cumulative count reaches threshold —
+    /// no double-counting, no lost increments. Drives N=20 concurrent tasks
+    /// against threshold=10 and asserts the post-condition deterministically.
+    #[tokio::test]
+    async fn test_circuit_breaker_concurrent_failures() {
+        let breaker = std::sync::Arc::new(CircuitBreaker::with_config(10, Duration::from_secs(60)));
+
+        let mut tasks = Vec::new();
+        for _ in 0..20 {
+            let b = breaker.clone();
+            tasks.push(tokio::spawn(async move {
+                b.record_failure().await;
+            }));
+        }
+        for t in tasks {
+            t.await.unwrap();
+        }
+
+        // After 20 concurrent failures with threshold 10, breaker must be Open.
+        // (We don't assert *which* of the 11th-20th failures opened it; only
+        // that the end state is Open, since once Open subsequent failures are
+        // no-ops by design.)
+        assert!(matches!(breaker.state().await, CircuitState::Open { .. }));
+        assert!(!breaker.can_proceed().await);
+    }
+
+    /// Timing test: from Open, do not transition to HalfOpen until the recovery
+    /// timeout has actually elapsed. Tight tolerances would be flaky in CI;
+    /// using 100ms + a 200ms margin gives a robust, fast test.
+    #[tokio::test]
+    async fn test_circuit_breaker_recovery_respects_timeout() {
+        let breaker = CircuitBreaker::with_config(1, Duration::from_millis(200));
+        breaker.record_failure().await;
+        assert!(matches!(breaker.state().await, CircuitState::Open { .. }));
+        assert!(!breaker.can_proceed().await);
+
+        // Just before the timeout — must still be Open
+        tokio::time::sleep(Duration::from_millis(80)).await;
+        assert!(!breaker.can_proceed().await);
+
+        // After the timeout — should flip to HalfOpen
+        tokio::time::sleep(Duration::from_millis(200)).await;
+        assert!(breaker.can_proceed().await);
+        assert!(matches!(breaker.state().await, CircuitState::HalfOpen));
+    }
+
+    /// A success in `Closed` state resets the consecutive-failure counter,
+    /// preventing partial-failure histories from accumulating across
+    /// otherwise-healthy operation.
+    #[tokio::test]
+    async fn test_circuit_breaker_success_resets_closed_counter() {
+        let breaker = CircuitBreaker::with_config(5, Duration::from_secs(60));
+        breaker.record_failure().await;
+        breaker.record_failure().await;
+        assert!(matches!(
+            breaker.state().await,
+            CircuitState::Closed { consecutive_failures: 2 }
+        ));
+
+        breaker.record_success().await;
+        assert!(matches!(
+            breaker.state().await,
+            CircuitState::Closed { consecutive_failures: 0 }
+        ));
+    }
+
     #[tokio::test]
     async fn test_failure_tracker() {
         let tracker = ConsecutiveFailureTracker::new(3);
-        
+
         // Record failures
         assert!(!tracker.record_failure().await); // 1
         assert!(!tracker.record_failure().await); // 2
         assert!(tracker.record_failure().await);  // 3 - threshold reached
-        
+
         // Success resets counter
         tracker.record_success().await;
         assert!(!tracker.should_open().await);

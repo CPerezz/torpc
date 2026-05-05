@@ -288,10 +288,13 @@
         </footer>
     </div>
 
+    <!--
+        Load order: wallet helpers register on `window.*Helper`, then `app.js`
+        wires them up via the WALLETS adapter list.
+    -->
     <script src="metamask-helper.js"></script>
     <script src="trustwallet-helper.js"></script>
     <script src="coinbase-helper.js"></script>
-    <script src="rainbow-helper.js"></script>
     <script src="rabby-helper.js"></script>
     <script src="app.js"></script>
 </body>

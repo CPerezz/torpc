@@ -11,9 +11,24 @@ NC := \033[0m # No Color
 # Service detection
 SERVICES_STARTED_BY_MAKEFILE := .makefile_started_services
 
-# Default target
+# Default test target — runs the FAST suite only (no daemons required).
+# Phase 6 marked every service-dependent test with `#[ignore]`, so this
+# target is now safe in CI and on a fresh clone. Use `make test-with-services`
+# to additionally exercise the ignored set.
 .PHONY: test
-test: check-services run-tests cleanup-if-needed
+test:
+	@echo "$(BLUE)Running fast tests (no services required)...$(NC)"
+	@RUST_LOG=warn cargo test --tests || \
+		(echo "$(RED)✗ Fast tests failed$(NC)" && exit 1)
+	@echo "$(BLUE)Running lib unit tests...$(NC)"
+	@RUST_LOG=warn cargo test --lib || \
+		(echo "$(RED)✗ Lib tests failed$(NC)" && exit 1)
+	@echo "$(GREEN)✓ Fast test suite passed$(NC)"
+
+# Full test target — same as before. Brings up daemons, runs everything
+# including #[ignore]'d tests serially because some still mutate global env.
+.PHONY: test-with-services
+test-with-services: check-services run-tests-with-services cleanup-if-needed
 
 # Check if services are already running
 .PHONY: check-services
@@ -61,21 +76,18 @@ start-services:
 		exit 1; \
 	fi
 
-# Run the tests
-.PHONY: run-tests
-run-tests:
-	@echo "$(BLUE)Running integration tests...$(NC)"
+# Run the FULL suite, including service-dependent #[ignore]'d tests.
+# Tests run with --test-threads=1 because some still call std::env::set_var
+# (which is process-global). Phase 6 follow-up will parameterise those out
+# and let this run in parallel.
+.PHONY: run-tests-with-services
+run-tests-with-services:
+	@echo "$(BLUE)Running full test suite (including service-dependent tests)...$(NC)"
 	@echo "==============================="
-	@echo "$(YELLOW)Note: Running tests sequentially to avoid rate limit interference$(NC)"
-	@export RUST_LOG=info; \
-	cargo test --test integration_tests -- --test-threads=1 --nocapture || \
-	(echo "$(RED)✗ Integration tests failed$(NC)" && exit 1)
-	@echo "$(BLUE)Running MEV integration tests...$(NC)"
-	@export RUST_LOG=info; \
-	cargo test --test mev_integration_tests -- --test-threads=1 --nocapture || \
-	(echo "$(RED)✗ MEV tests failed$(NC)" && exit 1)
+	@RUST_LOG=info cargo test --tests --lib -- --include-ignored --test-threads=1 --nocapture || \
+		(echo "$(RED)✗ Full suite failed$(NC)" && exit 1)
 	@echo "==============================="
-	@echo "$(GREEN)✓ All tests passed$(NC)"
+	@echo "$(GREEN)✓ Full suite passed$(NC)"
 
 # Cleanup - only stop services if we started them
 .PHONY: cleanup-if-needed

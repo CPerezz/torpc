@@ -64,6 +64,7 @@ async fn wait_for_service(url: &str, timeout: Duration) -> Result<(), String> {
     }
 }
 
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_mev_bundle_submission_without_key() {
     ensure_services_running();
@@ -104,6 +105,7 @@ async fn test_mev_bundle_submission_without_key() {
     assert!(json.get("result").is_some() || json.get("error").is_some());
 }
 
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_send_bundle_method() {
     ensure_services_running();
@@ -143,6 +145,7 @@ async fn test_send_bundle_method() {
     assert_eq!(json.get("jsonrpc").unwrap().as_str().unwrap(), "2.0");
 }
 
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_mev_with_signing_key() {
     ensure_services_running();
@@ -197,6 +200,7 @@ async fn test_mev_with_signing_key() {
     assert!(json.get("result").is_some());
 }
 
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_invalid_bundle_format() {
     ensure_services_running();
@@ -233,6 +237,7 @@ async fn test_invalid_bundle_format() {
     assert!(json.get("error").is_some());
 }
 
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_circuit_breaker_simulation() {
     ensure_services_running();
@@ -286,6 +291,7 @@ async fn test_circuit_breaker_simulation() {
     torpc_process.kill().unwrap();
 }
 
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_block_number_targeting() {
     ensure_services_running();
@@ -346,6 +352,7 @@ async fn test_block_number_targeting() {
 }
 
 /// Comprehensive test of the MEV protection flow
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_full_mev_protection_flow() {
     ensure_services_running();

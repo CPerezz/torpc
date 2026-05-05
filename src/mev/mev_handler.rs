@@ -12,7 +12,7 @@ use crate::{
     proxy::{ProxyState, proxy_to_geth},
     rpc_types::{JsonRpcRequest, JsonRpcResponse},
 };
-use super::mev_client_impl::MevRelayClient;
+use super::client::MevRelayClient;
 
 /// MEV-aware state wrapper
 pub struct MevProxyState {
@@ -25,6 +25,15 @@ pub async fn handle_flashbots_with_mev(
     State(state): State<Arc<MevProxyState>>,
     Json(request): Json<JsonRpcRequest>,
 ) -> ProxyResult<Json<JsonRpcResponse>> {
+    // Apply the strict per-method limiter before doing any upstream work.
+    // Without this, an attacker could exhaust their per-port read budget on
+    // cheap calls and then flip to flooding `eth_sendBundle` against the
+    // relay; the per-method bucket caps that path globally.
+    state
+        .base_state
+        .check_write_method_rate_limit(&request.method)
+        .await?;
+
     if let Some(mev_client) = &state.mev_client {
         match request.method.as_str() {
             "eth_sendRawTransaction" => {

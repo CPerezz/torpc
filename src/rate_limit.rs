@@ -1,11 +1,12 @@
 use axum::{
-    extract::{Request, State},
+    extract::{ConnectInfo, Request, State},
     http::StatusCode,
     middleware::Next,
     response::Response,
 };
 use std::{
     collections::HashMap,
+    net::SocketAddr,
     sync::Arc,
     time::{Duration, Instant},
 };
@@ -13,7 +14,7 @@ use tokio::sync::Mutex;
 use tracing::warn;
 
 /// Rate limiting configuration
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct RateLimitConfig {
     /// Maximum requests per window
     pub max_requests: u32,
@@ -86,34 +87,40 @@ impl RateLimiter {
     }
 }
 
-/// Extract identifier from request (IP address or Tor circuit ID)
+/// Extract a per-connection identifier from the request. Tor terminates each
+/// circuit as a fresh TCP connection from `127.0.0.1` with a unique ephemeral
+/// source port, so port-based bucketing approximates per-circuit rate
+/// limiting — far better than the previous behaviour, where every Tor user
+/// shared a single global bucket and one attacker could trip the limit for
+/// everyone.
+///
+/// The phantom `X-Tor-Circuit-ID` header check the old code performed has
+/// been removed: Tor doesn't add such a header, so the branch was dead code
+/// disguised as functionality.
 fn get_request_identifier(req: &Request) -> String {
-    // Check for Tor circuit ID in headers (when running behind Tor)
-    if let Some(circuit_id) = req.headers().get("X-Tor-Circuit-ID") {
-        if let Ok(id) = circuit_id.to_str() {
-            return format!("circuit:{}", id);
-        }
+    if let Some(ConnectInfo(addr)) = req.extensions().get::<ConnectInfo<SocketAddr>>() {
+        return format!("{}:{}", addr.ip(), addr.port());
     }
-    
-    // Fall back to IP address
-    // In production, this would extract from X-Forwarded-For or similar
-    // For now, we'll use a default since we're binding to localhost
-    "127.0.0.1".to_string()
+
+    // Fallback for tests / setups where ConnectInfo isn't wired up.
+    "unknown".to_string()
 }
 
-/// Rate limiting middleware
+/// Rate limiting middleware. Logs the bucket identifier on rejection so
+/// operators can see whether a flood is from a single Tor circuit (one port)
+/// or distributed (many ports) — useful when tuning thresholds.
 pub async fn rate_limit_middleware(
     State(limiter): State<Arc<RateLimiter>>,
     req: Request,
     next: Next,
 ) -> Result<Response, StatusCode> {
     let identifier = get_request_identifier(&req);
-    
+
     if !limiter.check_rate_limit(&identifier).await {
-        warn!("Rate limit exceeded for: {}", identifier);
+        warn!(identifier = %identifier, "rate limit exceeded");
         return Err(StatusCode::TOO_MANY_REQUESTS);
     }
-    
+
     Ok(next.run(req).await)
 }
 

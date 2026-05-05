@@ -121,33 +121,36 @@ pub struct SimulationResult {
     pub coinbase_diff: Option<String>,
 }
 
-/// Circuit breaker states for managing relay failures
-/// 
-/// # For Library Developers
-/// Internal state machine for implementing the circuit breaker pattern.
-/// Prevents cascading failures by failing fast when relay is unresponsive.
-/// 
+/// Circuit breaker states for managing relay failures.
+///
+/// The failure counter lives in `Closed`, not `Open`, because the only role
+/// of the counter is to *decide when to open*. Once Open, the relevant state
+/// is "when we opened" so we can transition to HalfOpen after the recovery
+/// timeout. Holding both fields in the same variant previously produced a
+/// state machine that lost its counter every time it failed to cross the
+/// threshold (see git history for the original bug).
+///
 /// # State Transitions
 /// ```text
-/// Closed --(5 failures)--> Open
-/// Open --(30 seconds)--> HalfOpen  
-/// HalfOpen --(success)--> Closed
-/// HalfOpen --(failure)--> Open
+/// Closed{n}    --(failure, n+1 >= threshold)--> Open{now}
+/// Closed{n}    --(failure, n+1 <  threshold)--> Closed{n+1}
+/// Closed{_}    --(success)-------------------->  Closed{0}
+/// Open{at}     --(elapsed >= recovery_timeout)-> HalfOpen   (lazy, on next can_proceed)
+/// HalfOpen     --(success)----------------------> Closed{0}
+/// HalfOpen     --(failure)----------------------> Open{now}
 /// ```
 #[derive(Debug, Clone, PartialEq)]
 pub enum CircuitState {
-    /// Normal operation - requests pass through
-    Closed,
-    
-    /// Relay is down - requests fail immediately  
-    Open { 
-        /// When the circuit opened
-        opened_at: Instant,
-        /// Number of consecutive failures that triggered opening
-        failure_count: u32,
-    },
-    
-    /// Testing if relay has recovered - allow one request
+    /// Normal operation — requests pass through.
+    /// `consecutive_failures` is the running count toward the open threshold.
+    Closed { consecutive_failures: u32 },
+
+    /// Relay is down — requests fail immediately until `recovery_timeout`
+    /// elapses, after which the next `can_proceed` flips us to `HalfOpen`.
+    Open { opened_at: Instant },
+
+    /// Testing if relay has recovered — allow one request through; success
+    /// closes the circuit, failure reopens it.
     HalfOpen,
 }
 
@@ -203,18 +206,4 @@ mod tests {
         assert!(!json.contains("maxTimestamp")); // Should be omitted when None
     }
     
-    #[test]
-    fn test_send_bundle_request() {
-        let bundle = Bundle {
-            txs: vec!["0xabc123".to_string()],
-            block_number: "0x1234".to_string(),
-            min_timestamp: None,
-            max_timestamp: None,
-        };
-        
-        let request = SendBundleRequest::new(bundle, 42);
-        assert_eq!(request.method, "eth_sendBundle");
-        assert_eq!(request.id, 42);
-        assert_eq!(request.params.len(), 1);
-    }
 }

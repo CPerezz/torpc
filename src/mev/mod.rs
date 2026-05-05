@@ -27,27 +27,11 @@
 
 pub mod auth;
 pub mod client;
+pub mod mev_handler;
 pub mod retry;
 pub mod types;
-pub mod mev_auth;
-pub mod mev_client_impl;
-pub mod mev_handler;
-pub mod mev_retry;
-pub mod mev_types;
 
 // Re-export main types for convenience
-pub use auth::{FlashbotsAuthenticator, AuthError};
-pub use client::MevRelayClient;
+pub use auth::{AuthError, FlashbotsAuthenticator};
+pub use client::{create_mev_client, MevRelayClient};
 pub use types::{Bundle, BundleResponse, MevConfig};
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_module_exports() {
-        // Verify main types are accessible
-        let _config = MevConfig::default();
-        // Other types are tested in their respective modules
-    }
-}

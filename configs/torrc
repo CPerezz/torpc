@@ -1,0 +1,29 @@
+# Tor configuration for TorPC
+# This creates a hidden service that forwards traffic to the local proxy
+
+# Basic Tor settings
+DataDirectory ./data/tor
+Log notice file ./data/tor/tor.log
+
+# Disable SOCKS proxy (we only need hidden service)
+SocksPort 0
+
+# Hidden service configuration
+# This creates a .onion address that forwards to our local proxy
+HiddenServiceDir ./data/tor/torpc/
+HiddenServicePort 80 127.0.0.1:8080
+
+# Optional: Additional hidden service for direct RPC access
+# HiddenServicePort 8545 127.0.0.1:8545
+
+# Security settings
+# Restrict connections to localhost only
+HiddenServiceAllowUnknownPorts 0
+
+# Optional: Enable single hop mode for testing (REDUCES ANONYMITY)
+# HiddenServiceSingleHopMode 1
+# HiddenServiceNonAnonymousMode 1
+
+# Connection settings
+AvoidDiskWrites 1
+RunAsDaemon 0

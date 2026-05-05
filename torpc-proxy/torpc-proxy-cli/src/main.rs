@@ -145,30 +145,64 @@ fn show_default_config() {
 }
 
 async fn test_tor_connectivity() -> Result<()> {
+    use std::time::Duration;
+    use tokio::time::timeout;
     use tokio_socks::tcp::Socks5Stream;
 
     info!("Testing Tor connectivity...");
 
-    // Try to connect to Tor SOCKS5 proxy
+    // Step 1: confirm Tor itself is reachable by hitting a well-known onion.
+    // DuckDuckGo's onion is stable and tolerates a single TCP probe.
     let tor_addr: SocketAddr = ([127, 0, 0, 1], 9050).into();
     info!("Using Tor SOCKS5 proxy at: {}", tor_addr);
 
-    // Try to connect to a known .onion address (DuckDuckGo's onion)
-    let test_onion = "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion:80";
-    info!("Testing connection to: {}", test_onion);
-    
-    match Socks5Stream::connect(tor_addr, test_onion).await {
-        Ok(_) => {
-            info!("✓ Successfully connected to Tor!");
-            info!("✓ Tor SOCKS5 proxy is working");
-            info!("✓ Can reach .onion addresses");
-            Ok(())
-        }
-        Err(e) => {
-            error!("✗ Failed to connect through Tor: {}", e);
-            error!("✗ Error type: {:?}", e);
+    let well_known = "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion:80";
+    info!("Step 1: probing Tor reachability via {}", well_known);
+    let probe = Socks5Stream::connect(tor_addr, well_known);
+    match timeout(Duration::from_secs(30), probe).await {
+        Ok(Ok(_)) => info!("✓ Tor is reachable; SOCKS5 working"),
+        Ok(Err(e)) => {
+            error!("✗ Tor SOCKS5 reach test failed: {}", e);
             error!("Make sure Tor is running and listening on port 9050");
-            Err(e.into())
+            return Err(e.into());
+        }
+        Err(_) => {
+            error!("✗ Tor reachability probe timed out after 30s");
+            return Err(anyhow::anyhow!("Tor reachability probe timed out"));
         }
     }
+
+    // Step 2: also probe the user's *configured* onion endpoint, since that's
+    // the one their wallet will actually use. Tor itself working doesn't
+    // imply the configured onion is up, and that's the more common failure.
+    let config_path = PathBuf::from("torpc-proxy.toml");
+    let configured = if config_path.exists() {
+        match Config::load_from_file(&config_path) {
+            Ok(c) if !c.onion_endpoint.is_empty() => Some(c.onion_endpoint),
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    if let Some(onion) = configured {
+        info!("Step 2: probing configured onion {}", onion);
+        let probe = Socks5Stream::connect(tor_addr, onion.as_str());
+        match timeout(Duration::from_secs(30), probe).await {
+            Ok(Ok(_)) => info!("✓ Configured onion endpoint is reachable"),
+            Ok(Err(e)) => {
+                error!("✗ Could not reach configured onion {}: {}", onion, e);
+                error!("Confirm the .onion address is correct and the remote service is up");
+                return Err(e.into());
+            }
+            Err(_) => {
+                error!("✗ Configured-onion probe timed out after 30s");
+                return Err(anyhow::anyhow!("Configured-onion probe timed out"));
+            }
+        }
+    } else {
+        info!("Step 2 skipped: no `onion_endpoint` configured in torpc-proxy.toml");
+    }
+
+    Ok(())
 }

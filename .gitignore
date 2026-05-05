@@ -1,19 +1,26 @@
-# Logs
+# ----- Logs --------------------------------------------------------------
 logs
 *.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 dev-debug.log
+
+# Personal task tracking — kept out of source control so the repo can be
+# cloned without leaking the original author's planning artifacts.
 prd.txt
 
-# Dependency directories
+# Per-developer Claude Code project instructions. Each contributor keeps
+# their own; not part of the source-controlled state.
+CLAUDE.md
+
+# ----- Dependency directories -------------------------------------------
 node_modules/
 
-# Environment variables
+# ----- Environment ------------------------------------------------------
 .env
 
-# Editor directories and files
+# ----- Editor / OS ------------------------------------------------------
 .idea
 .vscode
 *.suo
@@ -22,29 +29,31 @@ node_modules/
 *.sln
 *.sw?
 .taskmaster
-cache/
-
-# OS specific
 .DS_Store
 
-# Added by cargo
+# ----- Cargo / Rust ----------------------------------------------------
+# `Cargo.lock` is INTENTIONALLY tracked: torpc is a binary crate and
+# operators rely on reproducible builds. Per Cargo's own docs, libraries
+# may ignore `Cargo.lock` but binaries should commit it.
 /target
-Cargo.lock
-
-# Rust specific
 **/*.rs.bk
 *.pdb
 
-# Data directories
+# ----- Build / test output ---------------------------------------------
+cache/
+compiled/
+dev/cache/
+dev/out/
+output/contribute/
+tarpaulin-report.html
+cobertura.xml
+
+# ----- Runtime data ----------------------------------------------------
 /data/
 !/data/.gitkeep
 
-# Tor specific
+# ----- Tor specific ----------------------------------------------------
+# `configs/torrc` IS tracked so a fresh clone can run; only local overrides
+# are ignored. Generated `.onion` hostnames must never be committed.
 *.onion
 /configs/torrc.local
-/configs/
-/output/
-
-# Test artifacts
-tarpaulin-report.html
-cobertura.xml

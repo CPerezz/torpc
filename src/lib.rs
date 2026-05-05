@@ -1,3 +1,4 @@
+pub mod app;
 pub mod error;
 pub mod geth_client;
 pub mod mev;
