@@ -31,7 +31,12 @@
          * Add (or switch to) a custom EVM network in Coinbase Wallet via the
          * standard `wallet_addEthereumChain` flow.
          */
-        async addNetwork(rpcUrl, chainId = "1337", networkName = "ToRPC Privacy Network") {
+        // Default chainId is mainnet (1). The earlier default of 1337 (Geth
+        // `--dev`) silently created a dev-chain entry that pointed at a
+        // mainnet RPC URL, so every signature mismatched the chain the wallet
+        // thought it was on. Operators running torpc against a non-mainnet
+        // network must pass an explicit chainId.
+        async addNetwork(rpcUrl, chainId = "1", networkName = "ToRPC Privacy Network") {
             const provider = this.getCoinbaseWalletProvider();
             if (!provider) throw new Error("Coinbase Wallet not found");
             const chainHex = `0x${parseInt(chainId, 10).toString(16)}`;

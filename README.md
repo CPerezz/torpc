@@ -42,7 +42,7 @@ User → Tor Network → .onion address → TorPC Proxy → Geth Node
 - **Rust** 1.70 or later
 - **Geth** (go-ethereum) 1.10+
 - **Tor** 0.4.5+
-- **Foundry** (for testing) - latest version
+- **Foundry** *(optional — only required by `scripts/generate-test-data.sh`)*
 
 ### Hardware Requirements
 - **RAM**: 4GB minimum (8GB recommended)
@@ -51,17 +51,11 @@ User → Tor Network → .onion address → TorPC Proxy → Geth Node
 
 ## 🚀 Quick Start
 
-### One-Line Install (Linux/macOS)
-
-```bash
-curl -sSL https://raw.githubusercontent.com/yourusername/torpc/main/install.sh | bash
-```
-
-### Manual Quick Setup
+### Quick Setup
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/yourusername/torpc.git
+git clone https://github.com/CPerezz/torpc.git
 cd torpc
 
 # 2. Check prerequisites
@@ -232,8 +226,9 @@ geth --dev \
      --http \
      --http.addr 127.0.0.1 \
      --http.port 8545 \
-     --http.api eth,net,web3,personal,miner,txpool,debug \
-     --http.corsdomain "*" \
+     --http.api eth,net,web3 \
+     --http.corsdomain "http://localhost:8080" \
+     --http.vhosts "localhost,127.0.0.1" \
      --datadir ./data/geth-dev \
      --mine
 ```
@@ -267,34 +262,24 @@ RUST_LOG=info \
 ./target/release/torpc
 ```
 
-### Method 3: Using Docker
+### Method 3: Systemd Services (Production)
 
 ```bash
-# Build Docker image
-docker build -t torpc .
+# Render and install the templated unit files (asks for the deploy paths).
+sudo deploy/systemd-example/install-systemd.sh
 
-# Run with Docker Compose
-docker-compose up -d
+# Reload + start
+sudo systemctl daemon-reload
+sudo systemctl enable --now torpc-tor torpc-daemon
 
-# View logs
-docker-compose logs -f
+# Check status / logs
+sudo systemctl status torpc-daemon
+sudo journalctl -u torpc-daemon -f
 ```
 
-### Method 4: Systemd Services (Production)
-
-```bash
-# Install service files
-sudo cp services/*.service /etc/systemd/system/
-
-# Enable services
-sudo systemctl enable torpc-geth torpc-tor torpc-proxy
-
-# Start all services
-sudo systemctl start torpc-geth torpc-tor torpc-proxy
-
-# Check status
-sudo systemctl status torpc-*
-```
+The templates under `deploy/systemd-example/` ship `NoNewPrivileges`,
+`ProtectSystem=strict`, `PrivateTmp`, and `RestrictAddressFamilies`. Read
+the comment block at the top of each `.service.template` before installing.
 
 ## 🛑 Stopping Services
 
@@ -480,17 +465,24 @@ BIND_ADDR=127.0.0.1:8080              # Proxy bind address
 RUST_LOG=info                         # Log level (trace/debug/info/warn/error)
 
 # Rate limiting
-RATE_LIMIT_REQUESTS=60                # Max requests per window
+RATE_LIMIT_REQUESTS=100               # Max requests per (IP,port) bucket per window
 RATE_LIMIT_WINDOW=60                  # Window duration in seconds
+WRITE_RATE_LIMIT_REQUESTS=10          # Tighter bucket for eth_sendRawTransaction / eth_sendBundle
+WRITE_RATE_LIMIT_WINDOW=60
+MAX_CONCURRENT_CONNECTIONS=256        # Cap on in-flight requests across the router
 
 # Security settings
-MAX_REQUEST_SIZE=524288               # Max request body size (default: 512KB)
+MAX_REQUEST_SIZE=1048576              # Max request body size (default: 1 MiB; legacy alias MAX_BODY_SIZE)
 REQUEST_TIMEOUT=30                    # Request timeout in seconds
-STRICT_SECURITY_HEADERS=false         # Enable strict security (no CORS)
+STRICT_SECURITY_HEADERS=true          # When true, no CORS. Default true; flip to false only for local dev.
 
-# Tor settings (if using SOCKS)
-TOR_SOCKS_PROXY=127.0.0.1:9050        # Tor SOCKS proxy address
+# Tor anonymity safety net
+TORPC_ALLOW_NON_ANONYMOUS=1           # Permit HiddenServiceSingleHopMode in torrc (CI/benchmarks only)
 ```
+
+The full list of every variable the daemon reads, including each one's
+default and effects, is in [`.env.example`](.env.example). Copy it to
+`.env` (auto-loaded at startup) and edit in place.
 
 ### Configuration Files
 
@@ -599,9 +591,9 @@ TorPC implements comprehensive security headers to protect against common web at
 # - X-Frame-Options: DENY (prevents clickjacking)
 # - X-XSS-Protection: 0 (disables legacy XSS filter)
 # - Referrer-Policy: no-referrer (prevents onion address leaks)
-# - Content-Security-Policy: default-src 'none' (strict CSP for API)
+# - Content-Security-Policy: default-src 'self' (see src/security.rs::STATIC_CSP)
 # - Cache-Control: no-store, no-cache, must-revalidate
-# - Server header sanitized to prevent fingerprinting
+# - Server header stripped (no daemon fingerprint)
 ```
 
 ### Request Size Limits
@@ -624,14 +616,15 @@ export STRICT_SECURITY_HEADERS=true
 
 ### CORS Configuration
 
-By default, TorPC allows CORS for maximum compatibility:
+**Strict mode is the default**: CORS is off, security headers locked. Flip
+to lenient only for local development against an upstream that needs CORS:
 
 ```bash
-# Standard mode (with CORS - default)
-export STRICT_SECURITY_HEADERS=false
+# Default — production / Tor hidden service. No CORS.
+# (No env needed; STRICT_SECURITY_HEADERS=true is the default.)
 
-# Strict mode (no CORS - recommended for production)
-export STRICT_SECURITY_HEADERS=true
+# Lenient — local browser dev against a non-Tor upstream that needs CORS.
+export STRICT_SECURITY_HEADERS=false
 ```
 
 ## 🔒 Security Best Practices
@@ -764,86 +757,36 @@ echo "Log debug file ./data/tor/debug.log" >> configs/torrc
 
 ### Custom RPC Method Whitelisting
 
-Edit `src/whitelist.rs` to modify allowed methods:
-
-```rust
-const ALLOWED_METHODS: &[&str] = &[
-    // Add your custom methods here
-    "eth_blockNumber",
-    "eth_getBalance",
-    // ...
-];
-```
+The allow-list lives in [`src/whitelist.rs`](src/whitelist.rs); edit and
+recompile to add methods. There's no env-var override yet — opening one
+is tracked as a follow-up.
 
 ### Flashbots Integration
 
-The `/rpc/flashbots` endpoint automatically routes transactions to prevent MEV:
+The `/rpc/flashbots` endpoint routes `eth_sendRawTransaction` and
+`eth_sendBundle` to the configured `FLASHBOTS_RELAY_URL`. All other
+methods are proxied to Geth as usual.
 
-1. `eth_sendRawTransaction` → Flashbots Relay
-2. Other methods → Local Geth node
-
-To add Flashbots authentication:
-```rust
-// In src/proxy.rs
-headers.insert("X-Flashbots-Signature", signature);
-```
+EIP-191 authentication (`X-Flashbots-Signature: <addr>:<sig>`) is wired
+end-to-end — set `FLASHBOTS_SIGNING_KEY` to a 64-hex-char private key
+(any key works; it never holds funds). Without the key set, bundle
+submissions return JSON-RPC error `-32004` rather than silently faking
+a `bundleHash`.
 
 ### Monitoring & Metrics
 
+`/metrics` exposes a small JSON snapshot operators can scrape (or just
+`curl`):
+
 ```bash
-# Add Prometheus metrics (coming soon)
-cargo add prometheus
-
-# Export metrics endpoint
-METRICS_ADDR=127.0.0.1:9090
+curl http://127.0.0.1:8080/metrics | jq
+# { "security_metrics": { "blocked_requests_total": 0, ... },
+#   "circuits": { "geth": "closed", "mev_relay": "disabled" }, ... }
 ```
 
-### Docker Deployment
-
-```dockerfile
-# Dockerfile
-FROM rust:1.70 as builder
-WORKDIR /app
-COPY . .
-RUN cargo build --release
-
-FROM debian:bullseye-slim
-RUN apt-get update && apt-get install -y tor geth
-COPY --from=builder /app/target/release/torpc /usr/local/bin/
-COPY configs /etc/torpc/
-CMD ["torpc"]
-```
-
-```yaml
-# docker-compose.yml
-version: '3.8'
-services:
-  geth:
-    image: ethereum/client-go:latest
-    command: --dev --http --http.addr 0.0.0.0
-    volumes:
-      - geth-data:/data
-  
-  tor:
-    image: osminogin/tor-simple
-    volumes:
-      - tor-data:/var/lib/tor
-      - ./configs/torrc:/etc/tor/torrc
-  
-  torpc:
-    build: .
-    depends_on:
-      - geth
-      - tor
-    environment:
-      - GETH_URL=http://geth:8545
-    ports:
-      - "8080:8080"
-
-volumes:
-  geth-data:
-  tor-data:
-```
+Counters are atomic and persist for the lifetime of the process. The
+endpoint is reachable through the Tor hidden service today; a future
+phase will move admin endpoints onto a separate localhost-only listener.
 
 ## 🤝 Contributing
 
@@ -853,7 +796,7 @@ We welcome contributions! Please see [CONTRIBUTING.md](CONTRIBUTING.md) for guid
 
 ```bash
 # Fork and clone
-git clone https://github.com/yourusername/torpc.git
+git clone https://github.com/CPerezz/torpc.git
 cd torpc
 
 # Create feature branch
@@ -886,6 +829,6 @@ This project is licensed under the MIT License - see [LICENSE](LICENSE) for deta
 
 **Built with 🦀 Rust and 🧅 Tor for a more private Ethereum**
 
-[Report Bug](https://github.com/yourusername/torpc/issues) • [Request Feature](https://github.com/yourusername/torpc/issues)
+[Report Bug](https://github.com/CPerezz/torpc/issues) • [Request Feature](https://github.com/CPerezz/torpc/issues)
 
 </div>
