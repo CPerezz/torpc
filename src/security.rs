@@ -188,9 +188,11 @@ pub async fn add_security_headers(request: Request, next: Next) -> Response {
     );
     headers.insert("Pragma", HeaderValue::from_static("no-cache"));
     headers.insert("Expires", HeaderValue::from_static("0"));
+    // Strip identifying headers. Earlier revisions added an `X-Service: TorPC`
+    // banner here, defeating the point: anyone scanning .onion services could
+    // identify a TorPC node with a single HEAD request.
     headers.remove("Server");
-    headers.insert("X-Service", HeaderValue::from_static("TorPC"));
-    
+
     response
 }
 

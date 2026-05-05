@@ -29,6 +29,10 @@ anyhow = "1.0"
 thiserror = "1.0"
 once_cell = "1.19"
 chrono = { version = "0.4", features = ["serde"] }
+# Loads `.env` at startup so operators who `cp .env.example .env` get their
+# config applied without needing systemd EnvironmentFile= or `set -a; source`.
+# No-op when `.env` is absent.
+dotenvy = "0.15"
 
 # Cryptography for MEV
 secp256k1 = { version = "0.27", features = ["recovery"] }

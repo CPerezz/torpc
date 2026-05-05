@@ -2,7 +2,7 @@ use axum::{extract::State, Json};
 use reqwest::Client;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{debug, error, info, warn};
+use tracing::{debug, error, warn};
 
 use crate::{
     error::{ProxyError, ProxyResult},
@@ -184,7 +184,10 @@ pub async fn handle_flashbots(
 
     let response = match request.method.as_str() {
         "eth_sendRawTransaction" | "eth_sendBundle" => {
-            info!("Routing transaction to Flashbots");
+            // Volume-of-tx oracle if logged at INFO — operators with log
+            // shippers (journald → Loki, etc.) accidentally publish per-tx
+            // signal upstream. Keep below default verbosity.
+            debug!("Routing transaction to Flashbots");
             proxy_to_flashbots(&state, request).await?
         }
         _ => {
@@ -221,23 +224,30 @@ pub async fn proxy_to_geth(
     let response = match response_result {
         Ok(resp) => resp,
         Err(e) => {
+            // Log the full reqwest error locally; surface only a generic
+            // string to the caller. Tor visitors must not see Geth/network
+            // version strings.
             error!("Failed to send request to Geth: {}", e);
             state.geth_circuit.record_failure().await;
-            return Err(ProxyError::UpstreamError(format!(
-                "Geth connection failed: {}",
-                e
-            )));
+            return Err(ProxyError::UpstreamError("upstream unavailable".to_string()));
         }
     };
 
     if !response.status().is_success() {
         let status = response.status();
         let body = response.text().await.unwrap_or_default();
+        // Log the upstream body locally so operators can debug. Don't echo
+        // it: Geth error bodies leak version, EIP support, and internal paths.
         error!("Geth returned error status {}: {}", status, body);
-        state.geth_circuit.record_failure().await;
+        // Only break the circuit on 5xx and connect failures. 4xx is usually
+        // a client-shaped error (bad params, etc.) and shouldn't trip the
+        // operator's upstream-availability signal.
+        if status.is_server_error() {
+            state.geth_circuit.record_failure().await;
+        }
         return Err(ProxyError::UpstreamError(format!(
-            "Geth returned status {}: {}",
-            status, body
+            "upstream returned status {}",
+            status.as_u16()
         )));
     }
 

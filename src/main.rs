@@ -9,7 +9,7 @@
 use std::net::SocketAddr;
 
 use anyhow::Context;
-use tracing::info;
+use tracing::{debug, info, warn};
 use tracing_subscriber::EnvFilter;
 
 use torpc::app::{build_app, AppConfig};
@@ -49,30 +49,34 @@ async fn main() -> anyhow::Result<()> {
         .with_target(false)
         .init();
 
+    // Load `.env` if present. Operators who used to do `cp .env.example .env`
+    // and then `cargo run` previously had no env vars applied — the daemon
+    // never sourced the file. `dotenvy` is a no-op when the file is absent,
+    // so this is safe in systemd / docker setups that inject env directly.
+    let _ = dotenvy::dotenv();
+
     info!("Starting TorPC proxy server");
 
     let config = AppConfig::from_env();
     let bind_addr = config.bind_addr.clone();
     let built = build_app(config).await?;
 
-    // Tor advisory output (best-effort; never blocks startup).
+    // Tor configuration check. When `configs/torrc` is present, anonymity-
+    // disabling flags now fail the daemon hard (set TORPC_ALLOW_NON_ANONYMOUS=1
+    // to override for benchmarks/CI). When torrc is absent, this is a no-op.
     let tor_service = TorService::new();
-    if let Err(e) = tor_service.check_configuration() {
-        info!("Tor configuration issue: {}", e);
-        info!("Run ./scripts/setup-tor.sh to configure Tor");
-    } else {
-        match tor_service.get_hostname() {
-            Ok(Some(hostname)) => {
-                info!("🧅 Tor hidden service available at: http://{}", hostname);
-                info!("   RPC endpoint: http://{}/rpc", hostname);
-                info!("   Flashbots endpoint: http://{}/rpc/flashbots", hostname);
-            }
-            Ok(None) => {
-                info!("Tor is configured but not running yet");
-                info!("Start Tor with: ./scripts/start-tor.sh");
-            }
-            Err(e) => info!("Could not read Tor hostname: {}", e),
-        }
+    tor_service
+        .check_configuration()
+        .context("Tor configuration check failed; see error above for the offending line")?;
+    match tor_service.get_hostname() {
+        // The .onion hostname is the operator's public-facing identity. At
+        // INFO level it shows up in journalctl / syslog / log shippers,
+        // which makes accidental disclosure surprisingly easy. Keep it
+        // behind RUST_LOG=debug; operators who want it can `cat
+        // data/tor/torpc/hostname`.
+        Ok(Some(_)) => debug!("Tor hidden service hostname resolved (cat data/tor/torpc/hostname to view)"),
+        Ok(None) => info!("Tor is configured but not running yet"),
+        Err(e) => warn!("Could not read Tor hostname: {}", e),
     }
 
     let addr: SocketAddr = bind_addr

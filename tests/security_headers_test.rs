@@ -63,7 +63,17 @@ fn assert_security_headers(response: &axum_test::TestResponse) {
     );
     assert_eq!(response.header("pragma"), "no-cache");
     assert_eq!(response.header("expires"), "0");
-    assert_eq!(response.header("x-service"), "TorPC");
+    // `X-Service: TorPC` used to be set here; deliberately removed to stop
+    // self-fingerprinting the .onion. Anyone with HEAD-request access could
+    // identify TorPC instances from a single header check.
+    assert!(
+        response.headers().get("x-service").is_none(),
+        "x-service header must not be set — it would identify the daemon over .onion"
+    );
+    assert!(
+        response.headers().get("server").is_none(),
+        "server header must be stripped — same fingerprinting concern"
+    );
 
     let csp = response
         .header("content-security-policy")

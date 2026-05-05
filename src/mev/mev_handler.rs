@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 use axum::{extract::State, Json};
-use tracing::{info, warn};
+use tracing::{debug, warn};
 
 use crate::{
     error::{ProxyError, ProxyResult},
@@ -54,8 +54,9 @@ pub async fn handle_flashbots_with_mev(
                 let current_block = u64::from_str_radix(block_hex.trim_start_matches("0x"), 16)
                     .map_err(|e| ProxyError::InternalError(format!("Invalid block number: {}", e)))?;
                 
-                // Submit via MEV client
-                info!("Submitting transaction via MEV relay");
+                // Submit via MEV client. Logged at debug to keep per-tx
+                // routing decisions out of default operator logs.
+                debug!("Submitting transaction via MEV relay");
                 let bundle_hash = mev_client.handle_send_raw_transaction(&request, current_block).await?;
                 
                 // Return bundle hash as if it were a transaction hash
@@ -68,7 +69,7 @@ pub async fn handle_flashbots_with_mev(
             }
             "eth_sendBundle" => {
                 // Direct bundle submission
-                info!("Submitting bundle via MEV relay");
+                debug!("Submitting bundle via MEV relay");
                 let bundle_hash = mev_client.handle_send_bundle(&request).await?;
                 
                 Ok(Json(JsonRpcResponse {

@@ -145,7 +145,11 @@ impl MevRelayClient {
             match self.send_bundle_attempt(&body).await {
                 Ok(bundle_hash) => {
                     self.circuit_breaker.record_success().await;
-                    info!("Bundle submitted successfully: {}", bundle_hash);
+                    // Bundle hash is a correlatable identifier for a real
+                    // user's transaction. INFO-level logs flow into syslog /
+                    // log shippers by default; downgrade so operators have to
+                    // opt in via RUST_LOG=debug.
+                    debug!("Bundle submitted successfully: {}", bundle_hash);
                     return Ok(bundle_hash);
                 }
                 Err(e) => {

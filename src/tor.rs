@@ -32,8 +32,16 @@ impl TorService {
     /// administrator that did `chmod 755 data/tor/torpc/` can't accidentally
     /// expose the service key to other users.
     pub fn check_configuration(&self) -> Result<()> {
+        // No torrc → operator is running torpc without a hidden service
+        // (e.g. for local dev or behind their own reverse proxy). Skip the
+        // anonymity audit and the data-dir setup; it would be both useless
+        // and intrusive (creating ./data/tor/torpc out of thin air).
         if !Path::new(&self.config_path).exists() {
-            anyhow::bail!("Tor configuration file not found at: {}", self.config_path);
+            info!(
+                "torrc not found at {}; skipping Tor configuration check",
+                self.config_path
+            );
+            return Ok(());
         }
 
         // Refuse to start if torrc disables anonymity, unless explicitly
