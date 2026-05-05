@@ -58,10 +58,6 @@
                 throw error;
             }
         },
-
-        // Compatibility shims — use `ProxyDiscovery` directly in new code.
-        queryProxyDiscovery: () => window.ProxyDiscovery.queryProxyDiscovery(),
-        copyToClipboard: (t) => window.ProxyDiscovery.copyToClipboard(t),
     };
 
     window.CoinbaseWalletHelper = CoinbaseWalletHelper;

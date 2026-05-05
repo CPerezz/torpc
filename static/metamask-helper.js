@@ -1,6 +1,4 @@
 // MetaMask helper — wallet-specific bits only.
-// Discovery and clipboard now live in `proxy-discovery.js` to avoid the
-// near-identical 50-line copy in every wallet helper.
 
 (function () {
     "use strict";
@@ -20,11 +18,6 @@
         async isMainnet() {
             return (await this.getCurrentChainId()) === "0x1";
         },
-
-        // Compatibility shims for code that still calls these on the helper
-        // directly. New callers should use `ProxyDiscovery.*` instead.
-        queryProxyDiscovery: () => window.ProxyDiscovery.queryProxyDiscovery(),
-        copyToClipboard: (t) => window.ProxyDiscovery.copyToClipboard(t),
     };
 
     window.MetaMaskHelper = MetaMaskHelper;

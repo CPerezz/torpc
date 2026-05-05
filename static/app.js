@@ -126,8 +126,35 @@
     // hooks deal with deep links, "Add network" buttons, and so on.
     // ---------------------------------------------------------------------
 
-    const FALLBACK_URL = (window.ProxyDiscovery && window.ProxyDiscovery.DEFAULT_FALLBACK_URL)
-        || "http://localhost:8545";
+    // Hardcoded RPC URL the wallet sections show to the user. Used to be
+    // the result of an HTTP discovery call to the local proxy on
+    // localhost:8081, but that endpoint is default-disabled, the static
+    // CSP no longer permits the cross-origin fetch, and the helpers were
+    // already falling through to this same literal whenever discovery
+    // failed (which was always). The discovery indirection was deleted.
+    const RPC_URL = "http://localhost:8545";
+
+    /**
+     * Copy a string to the clipboard, with a fallback for non-secure
+     * contexts (e.g. plain `http://onion-host` over Tor without TLS,
+     * where `navigator.clipboard` is gated).
+     */
+    async function copyToClipboard(text) {
+        try {
+            await navigator.clipboard.writeText(text);
+            return true;
+        } catch (_) {
+            const ta = document.createElement("textarea");
+            ta.value = text;
+            ta.style.position = "fixed";
+            ta.style.left = "-9999px";
+            document.body.appendChild(ta);
+            ta.select();
+            const ok = document.execCommand("copy");
+            document.body.removeChild(ta);
+            return ok;
+        }
+    }
 
     const WALLETS = [
         {
@@ -256,7 +283,7 @@
 
         if (els.copyBtn && els.rpcInput) {
             els.copyBtn.addEventListener("click", async () => {
-                const ok = await window.ProxyDiscovery.copyToClipboard(els.rpcInput.value);
+                const ok = await copyToClipboard(els.rpcInput.value);
                 if (ok) flashCopied(els.copyBtn);
             });
         }
@@ -275,29 +302,13 @@
             return;
         }
 
+        // No discovery call — show the configured RPC URL directly. Users
+        // running the proxy on a non-default port edit RPC_URL above.
         if (els.statusContainer) els.statusContainer.style.display = "block";
         if (els.statusText) {
-            els.statusText.innerHTML =
-                '<span class="spinner"></span> Detecting ToRPC proxy client...';
+            els.statusText.textContent = "Use the RPC URL below in your wallet:";
         }
-
-        let discovery;
-        try {
-            discovery = await window.ProxyDiscovery.queryProxyDiscovery();
-        } catch (e) {
-            console.error("[" + cfg.id + "] discovery error:", e);
-            discovery = { success: false, error: "Error detecting proxy", fallbackUrl: FALLBACK_URL };
-        }
-
-        const rpcUrl = discovery.success
-            ? discovery.rpcUrl
-            : (discovery.fallbackUrl || FALLBACK_URL);
-
-        if (els.statusText) {
-            els.statusText.textContent = discovery.success
-                ? "✓ ToRPC proxy detected!"
-                : (discovery.error || "Failed to detect ToRPC proxy client");
-        }
+        const rpcUrl = RPC_URL;
         if (els.rpcInput) els.rpcInput.value = rpcUrl;
         if (els.rpcInfo) els.rpcInfo.style.display = "block";
         if (els.instructions) els.instructions.style.display = "block";
