@@ -89,7 +89,14 @@ async fn test_rate_limiting_integration() {
 
 #[test]
 fn test_static_files_exist() {
-    let static_files = ["static/index.html", "static/style.css", "static/app.js"];
+    // After the Phase-3 audience split, the daemon serves two top-level
+    // templates (chosen by `Host` header) instead of a single index.html.
+    let static_files = [
+        "static/index_operator.html",
+        "static/index_user.html",
+        "static/style.css",
+        "static/app.js",
+    ];
 
     for file in &static_files {
         let path = std::path::Path::new(file);

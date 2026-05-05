@@ -26,6 +26,9 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 use tracing::{error, info};
 
+use axum::http::HeaderMap;
+use axum::response::Html;
+
 use crate::mev::mev_handler::{handle_flashbots_with_mev, MevProxyState};
 use crate::mev::{create_mev_client, MevConfig};
 use crate::proxy::{self, handle_rpc, ProxyState};
@@ -34,6 +37,42 @@ use crate::security::{
     health_check, json_rpc_timeout_middleware, security_headers_middleware, security_metrics,
     SecurityConfig, STATIC_CSP,
 };
+
+/// Operator dashboard — test panel + self-test wallet flows + endpoint
+/// reference. Served when the visitor reaches the daemon by `127.0.0.1`,
+/// LAN, or any non-`.onion` host.
+const INDEX_OPERATOR_HTML: &str = include_str!("../static/index_operator.html");
+
+/// Wallet-onboarding flow — install-the-client step + wallet picker, gated
+/// by a JS probe of `localhost:8545`. Served when the `Host` header ends
+/// in `.onion`, i.e. the visitor reached us through Tor.
+const INDEX_USER_HTML: &str = include_str!("../static/index_user.html");
+
+/// Pick which `index_*.html` template to return based on the request `Host`.
+/// `.onion` host → user-facing wallet-onboarding template; anything else →
+/// operator dashboard.
+///
+/// Ports are stripped before suffix matching, so an operator binding to a
+/// non-default port still sees the operator template, and Tor Browser
+/// hitting `<onion>:80` sees the user template.
+///
+/// Spoofing concern: an attacker on the operator's LAN can send
+/// `Host: foo.onion` and force the user template. They get an install-
+/// the-client page that exposes no operator state — the JS probe runs in
+/// *their* browser against *their* localhost. Not a leak.
+async fn serve_root(headers: HeaderMap) -> Html<&'static str> {
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .unwrap_or("");
+    let hostname = host.split(':').next().unwrap_or("").to_ascii_lowercase();
+
+    if hostname.ends_with(".onion") {
+        Html(INDEX_USER_HTML)
+    } else {
+        Html(INDEX_OPERATOR_HTML)
+    }
+}
 
 /// All operator-configurable knobs the daemon needs at startup. Construct
 /// via `from_env()` for production or by literal in tests.
@@ -253,7 +292,13 @@ pub async fn build_app(config: AppConfig) -> anyhow::Result<BuiltApp> {
     // Reaching them through the .onion would leak component state, request
     // volume, uptime, and version to anonymous Tor visitors. Path resolution
     // is route-tree based — they will 404 on this router.
+    //
+    // GET / serves one of two templates based on the request `Host` header:
+    // visitors via .onion get `index_user.html`; operators on LAN/loopback
+    // get `index_operator.html`. Static assets (app.js, helpers, style.css)
+    // are served by ServeDir as the fallback.
     let app = Router::new()
+        .route("/", get(serve_root))
         .route(
             "/rpc",
             post({
@@ -276,7 +321,7 @@ pub async fn build_app(config: AppConfig) -> anyhow::Result<BuiltApp> {
             rate_limiter.clone(),
             rate_limit_middleware,
         ))
-        .nest_service("/", ServeDir::new(&config.static_dir))
+        .fallback_service(ServeDir::new(&config.static_dir))
         .with_state(mev_state.clone())
         .layer(ConcurrencyLimitLayer::new(config.max_concurrent))
         .layer(DefaultBodyLimit::max(config.security.max_body_size))

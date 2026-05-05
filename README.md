@@ -300,8 +300,21 @@ torsocks curl -X POST http://$(cat data/tor/torpc/hostname)/rpc \
   -d '{"jsonrpc":"2.0","method":"eth_blockNumber","params":[],"id":1}'
 ```
 
-The static UI is reachable at <http://localhost:8080> for wallet
-onboarding instructions and a JSON-RPC test panel.
+The static UI at <http://localhost:8080> serves two templates depending
+on the request `Host` header:
+
+- **Operator dashboard** (`Host: 127.0.0.1:8080` or any non-`.onion`):
+  endpoint reference, JSON-RPC test panel, self-test wallet flows. This
+  is what the operator sees when they `curl` or browse the bind address
+  directly.
+- **Wallet-onboarding flow** (`Host: <hostname>.onion`): install-the-
+  client step gated by a JS probe of `localhost:8545`, then a wallet
+  picker (MetaMask / Coinbase Wallet / Rabby / Trust Wallet) with copy-
+  to-clipboard RPC URL and per-wallet "Add network" buttons. This is
+  what visitors see when they reach the daemon through Tor.
+
+Source-of-truth templates are `static/index_operator.html` and
+`static/index_user.html`; routing lives in `src/app.rs::serve_root`.
 
 ---
 

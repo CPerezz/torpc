@@ -228,19 +228,146 @@ footer {
     }
 }
 
-/* Loading animation */
-.loading {
-    display: inline-block;
-    width: 20px;
-    height: 20px;
-    border: 3px solid var(--bg-light);
-    border-radius: 50%;
-    border-top-color: var(--accent);
-    animation: spin 1s ease-in-out infinite;
-}
-
 @keyframes spin {
     to { transform: rotate(360deg); }
+}
+
+/* -----------------------------------------------------------------------
+   User-template additions: stepped layout, callouts, wallet picker.
+   The operator template doesn't include these elements; styles here only
+   activate when the matching DOM is present.
+   ----------------------------------------------------------------------- */
+
+.step-section { background: var(--bg-light); }
+
+.step-num {
+    display: inline-block;
+    width: 28px;
+    height: 28px;
+    line-height: 28px;
+    text-align: center;
+    background: var(--accent);
+    color: white;
+    border-radius: 50%;
+    font-size: 0.85em;
+    margin-right: 10px;
+    vertical-align: middle;
+}
+
+.muted { color: var(--text-secondary); }
+
+.install-options {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    margin: 20px 0;
+}
+
+.install-options .btn,
+.install-options .btn-primary,
+.install-options .btn-small {
+    margin: 0;
+    display: inline-block;
+}
+
+.callout {
+    margin-top: 16px;
+    padding: 12px 16px;
+    border-radius: 4px;
+    border: 1px solid;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.callout code { padding: 1px 5px; }
+
+.callout-pending {
+    background: rgba(155, 89, 182, 0.08);
+    border-color: rgba(155, 89, 182, 0.3);
+    color: var(--text-secondary);
+}
+
+.callout-warn {
+    background: rgba(243, 156, 18, 0.08);
+    border-color: rgba(243, 156, 18, 0.5);
+    color: var(--text-primary);
+}
+
+.callout-success {
+    background: rgba(39, 174, 96, 0.08);
+    border-color: rgba(39, 174, 96, 0.5);
+    color: var(--text-primary);
+}
+
+.callout-warn h2,
+.callout-warn p { color: var(--text-primary); }
+
+.wallet-picker {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 12px;
+    margin: 16px 0 24px;
+}
+
+.wallet-card {
+    background: var(--bg-dark);
+    color: var(--text-primary);
+    border: 1px solid #333;
+    border-radius: 6px;
+    padding: 16px;
+    cursor: pointer;
+    font-size: 1em;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 8px;
+    transition: border-color 0.15s, transform 0.15s;
+}
+
+.wallet-card:hover { border-color: var(--accent); }
+.wallet-card:active { transform: translateY(1px); }
+.wallet-card.active {
+    border-color: var(--accent);
+    background: rgba(155, 89, 182, 0.1);
+}
+
+.wallet-card:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
+}
+
+.wallet-emoji { font-size: 2em; }
+
+.wallet-flow {
+    background: var(--bg-dark);
+    padding: 16px;
+    border-radius: 6px;
+    margin-top: 16px;
+}
+
+.threat-model {
+    margin: 30px 0;
+    padding: 16px 20px;
+    background: var(--bg-light);
+    border-radius: 6px;
+    border-left: 3px solid var(--accent);
+}
+
+.threat-model summary {
+    cursor: pointer;
+    font-weight: bold;
+    color: var(--accent);
+}
+
+.threat-model[open] summary { margin-bottom: 12px; }
+.threat-model p { margin: 8px 0; color: var(--text-secondary); }
+
+/* Restore default focus outlines so keyboard users can see where they are.
+   Safari/Chrome were stripping these on `.btn:focus`. */
+.btn:focus-visible {
+    outline: 2px solid var(--accent);
+    outline-offset: 2px;
 }
 
 /* MetaMask Section */

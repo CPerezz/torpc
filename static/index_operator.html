@@ -1,0 +1,187 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TorPC — Operator Dashboard</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><span aria-hidden="true">🧅</span> TorPC</h1>
+            <p>Operator dashboard <span class="muted">— for your local view only.</span></p>
+        </header>
+
+        <section class="info-section">
+            <h2>Endpoints</h2>
+            <div class="info-grid">
+                <div class="info-item">
+                    <span class="label">Public RPC</span>
+                    <code class="endpoint">/rpc</code>
+                    <p class="muted">Forwarded by your <code>.onion</code> service.</p>
+                </div>
+                <div class="info-item">
+                    <span class="label">Flashbots</span>
+                    <code class="endpoint">/rpc/flashbots</code>
+                    <p class="muted">Routes <code>eth_sendRawTransaction</code> &amp; <code>eth_sendBundle</code> via the relay.</p>
+                </div>
+                <div class="info-item">
+                    <span class="label">Admin (loopback only)</span>
+                    <code class="endpoint">http://127.0.0.1:9001/health</code>
+                    <code class="endpoint">http://127.0.0.1:9001/metrics</code>
+                </div>
+                <div class="info-item">
+                    <span class="label">Status</span>
+                    <span id="status" class="status-unknown">Checking…</span>
+                </div>
+            </div>
+        </section>
+
+        <section class="test-section">
+            <h2>Test RPC</h2>
+
+            <div class="method-selector">
+                <label for="method">Method:</label>
+                <select id="method">
+                    <option value="eth_blockNumber">eth_blockNumber</option>
+                    <option value="eth_chainId">eth_chainId</option>
+                    <option value="net_version">net_version</option>
+                    <option value="eth_gasPrice">eth_gasPrice</option>
+                    <option value="eth_getBalance">eth_getBalance</option>
+                </select>
+            </div>
+
+            <div class="params-input" id="params-section" style="display: none;">
+                <label for="params">Parameters (JSON):</label>
+                <input type="text" id="params" placeholder='["0x..."]'>
+            </div>
+
+            <div class="endpoint-selector">
+                <label>
+                    <input type="radio" name="endpoint" value="/rpc" checked>
+                    Standard RPC
+                </label>
+                <label>
+                    <input type="radio" name="endpoint" value="/rpc/flashbots">
+                    Flashbots
+                </label>
+            </div>
+
+            <button id="test-btn" class="btn" type="button">Send Request</button>
+
+            <div class="results">
+                <h3>Request</h3>
+                <pre id="request-display" class="code-block"></pre>
+
+                <h3>Response</h3>
+                <pre id="response-display" class="code-block"></pre>
+            </div>
+        </section>
+
+        <section class="self-test-section">
+            <h2>Wallet self-test</h2>
+            <p class="muted">These are the wallet onboarding flows your visitors see at
+                the <code>.onion</code>. Use them locally to verify each adapter still
+                works after upgrades.</p>
+
+            <div class="metamask-container">
+                <h3>🦊 MetaMask</h3>
+                <button id="add-to-metamask" class="btn btn-metamask" type="button">
+                    Show RPC URL
+                </button>
+                <div id="metamask-status" class="metamask-status" style="display: none;">
+                    <div class="status-message">
+                        <span id="status-text" class="muted">Use the RPC URL below in your wallet:</span>
+                    </div>
+                    <div id="rpc-info" class="rpc-info" style="display: none;">
+                        <label for="rpc-url">RPC URL:</label>
+                        <div class="rpc-url-container">
+                            <input type="text" id="rpc-url" readonly>
+                            <button id="copy-btn" class="btn btn-copy" type="button">Copy</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="trustwallet-container">
+                <h3>🛡️ Trust Wallet</h3>
+                <button id="add-to-trustwallet" class="btn btn-trustwallet" type="button">
+                    Show RPC URL
+                </button>
+                <div id="trustwallet-status" class="trustwallet-status" style="display: none;">
+                    <div class="status-message">
+                        <span id="trust-status-text" class="muted">Use the RPC URL below in your wallet:</span>
+                    </div>
+                    <div id="trust-rpc-info" class="rpc-info" style="display: none;">
+                        <label>RPC URL:</label>
+                        <div class="input-group">
+                            <input type="text" id="trust-rpc-url" readonly class="rpc-url-input">
+                            <button id="trust-copy-btn" class="btn btn-small" type="button">Copy</button>
+                        </div>
+                    </div>
+                    <a id="trust-deeplink-btn" class="btn btn-deeplink" style="display: none;" target="_blank" rel="noopener">
+                        Open in Trust Wallet
+                    </a>
+                </div>
+            </div>
+
+            <div class="coinbase-container">
+                <h3>🔵 Coinbase Wallet</h3>
+                <button id="add-to-coinbase" class="btn btn-coinbase" type="button">
+                    Show RPC URL
+                </button>
+                <div id="coinbase-status" class="coinbase-status" style="display: none;">
+                    <div class="status-message">
+                        <span id="coinbase-status-text" class="muted">Use the RPC URL below in your wallet:</span>
+                    </div>
+                    <div id="coinbase-rpc-info" class="rpc-info" style="display: none;">
+                        <label>RPC URL:</label>
+                        <div class="input-group">
+                            <input type="text" id="coinbase-rpc-url" readonly class="rpc-url-input">
+                            <button id="coinbase-copy-btn" class="btn btn-small" type="button">Copy</button>
+                        </div>
+                    </div>
+                    <button id="coinbase-add-network-btn" class="btn btn-primary" style="display: none;" type="button">
+                        Add to Coinbase Wallet Extension
+                    </button>
+                </div>
+            </div>
+
+            <div class="rabby-container">
+                <h3>🐰 Rabby</h3>
+                <button id="add-to-rabby" class="btn btn-rabby" type="button">
+                    Show RPC URL
+                </button>
+                <div id="rabby-status" class="rabby-status" style="display: none;">
+                    <div class="status-message">
+                        <span id="rabby-status-text" class="muted">Use the RPC URL below in your wallet:</span>
+                    </div>
+                    <div id="rabby-rpc-info" class="rpc-info" style="display: none;">
+                        <label>RPC URL:</label>
+                        <div class="input-group">
+                            <input type="text" id="rabby-rpc-url" readonly class="rpc-url-input">
+                            <button id="rabby-copy-btn" class="btn btn-small" type="button">Copy</button>
+                        </div>
+                    </div>
+                    <button id="rabby-add-network-btn" class="btn btn-primary" style="display: none;" type="button">
+                        Add to Rabby
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <footer>
+            <p>To onboard wallet users, share your <code>.onion</code> address
+               (<code>cat data/tor/torpc/hostname</code>) — visitors will see a
+               wallet-onboarding page rather than this dashboard.</p>
+        </footer>
+    </div>
+
+    <script src="metamask-helper.js"></script>
+    <script src="trustwallet-helper.js"></script>
+    <script src="coinbase-helper.js"></script>
+    <script src="rabby-helper.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

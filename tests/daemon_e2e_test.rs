@@ -180,6 +180,112 @@ async fn metrics_endpoint_exposes_live_counters() {
     assert_eq!(body["security_metrics"]["blocked_requests_total"], 1);
 }
 
+// -----------------------------------------------------------------------------
+// Phase-3 audience-split regression guards. GET / picks `index_user.html`
+// vs `index_operator.html` based on the `Host` header — visitors via
+// .onion get the wallet-onboarding template, operator on LAN/loopback gets
+// the dashboard. These tests pin both branches so a future routing change
+// (e.g. accidentally re-introducing `nest_service("/", ...)`) is caught.
+// -----------------------------------------------------------------------------
+
+/// Marker strings unique to each template — chosen so a regression that
+/// served the wrong template (or a stale `index.html`) is loud.
+const USER_TEMPLATE_MARKER: &str = "Install the local TorPC client";
+const OPERATOR_TEMPLATE_MARKER: &str = "Operator dashboard";
+
+#[tokio::test]
+async fn root_serves_user_template_for_onion_host() {
+    let mut geth = Server::new_async().await;
+    let _m = mock_geth_block_number(&mut geth, "0x1");
+
+    let server = make_server(geth.url(), |_| {}).await;
+    let response = server
+        .get("/")
+        .add_header(
+            axum::http::HeaderName::from_static("host"),
+            axum::http::HeaderValue::from_static("abcdef0123456789.onion"),
+        )
+        .await;
+
+    assert_eq!(response.status_code(), 200);
+    let body = response.text();
+    assert!(
+        body.contains(USER_TEMPLATE_MARKER),
+        "expected user template marker in response body"
+    );
+    assert!(
+        !body.contains(OPERATOR_TEMPLATE_MARKER),
+        "operator marker leaked into .onion response — audience split is broken"
+    );
+}
+
+#[tokio::test]
+async fn root_serves_operator_template_for_loopback_host() {
+    let mut geth = Server::new_async().await;
+    let _m = mock_geth_block_number(&mut geth, "0x1");
+
+    let server = make_server(geth.url(), |_| {}).await;
+    let response = server
+        .get("/")
+        .add_header(
+            axum::http::HeaderName::from_static("host"),
+            axum::http::HeaderValue::from_static("127.0.0.1:8080"),
+        )
+        .await;
+
+    assert_eq!(response.status_code(), 200);
+    let body = response.text();
+    assert!(
+        body.contains(OPERATOR_TEMPLATE_MARKER),
+        "expected operator template marker in response body"
+    );
+    assert!(
+        !body.contains(USER_TEMPLATE_MARKER),
+        "user template leaked into operator response"
+    );
+}
+
+#[tokio::test]
+async fn root_with_port_in_onion_host_still_picks_user_template() {
+    // `Host: foo.onion:80` should still match — the port suffix used to
+    // confuse a literal `ends_with(".onion")` check. Pin the port-stripping
+    // behavior so a regression there doesn't quietly serve the operator
+    // template to .onion visitors.
+    let mut geth = Server::new_async().await;
+    let _m = mock_geth_block_number(&mut geth, "0x1");
+
+    let server = make_server(geth.url(), |_| {}).await;
+    let response = server
+        .get("/")
+        .add_header(
+            axum::http::HeaderName::from_static("host"),
+            axum::http::HeaderValue::from_static("foo.onion:80"),
+        )
+        .await;
+
+    assert_eq!(response.status_code(), 200);
+    assert!(response.text().contains(USER_TEMPLATE_MARKER));
+}
+
+#[tokio::test]
+async fn static_assets_still_serve_through_fallback() {
+    // The `nest_service("/", ServeDir)` → `route("/") + fallback_service(ServeDir)`
+    // refactor must not break delivery of assets like `app.js` and
+    // `style.css`. Without these, both templates are inert.
+    let mut geth = Server::new_async().await;
+    let _m = mock_geth_block_number(&mut geth, "0x1");
+
+    let server = make_server(geth.url(), |_| {}).await;
+    for asset in ["/app.js", "/style.css"] {
+        let response = server.get(asset).await;
+        assert_eq!(
+            response.status_code(),
+            200,
+            "{asset} must still be served by the static fallback"
+        );
+    }
+}
+
 /// Regression guard for the Phase-2 admin/public split. `/health` and
 /// `/metrics` must NOT be reachable through the Tor-facing router — that
 /// would publish operator-side state (uptime, version, component circuit
