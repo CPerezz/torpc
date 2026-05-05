@@ -113,8 +113,15 @@ installing.
 
 ### Observability
 
+`/health` and `/metrics` live on a **separate localhost-only listener**
+(default `127.0.0.1:9001`, set via `ADMIN_BIND_ADDR`). They are NOT
+reachable through the Tor hidden service — the .onion forwards only to
+`BIND_ADDR`. This is deliberate: those endpoints leak component state,
+request volume, uptime, and version, none of which should be visible to
+anonymous Tor visitors.
+
 ```bash
-curl http://127.0.0.1:8080/metrics | jq
+curl http://127.0.0.1:9001/metrics | jq
 # {
 #   "security_metrics": {
 #     "blocked_requests_total": 0,
@@ -125,12 +132,13 @@ curl http://127.0.0.1:8080/metrics | jq
 #   "circuits": { "geth": "closed", "mev_relay": "disabled" }
 # }
 
-curl http://127.0.0.1:8080/health
+curl http://127.0.0.1:9001/health
 # { "status": "ok", "uptime_seconds": 1234, ... }
 ```
 
-Both endpoints are reachable through the Tor hidden service today; a future
-phase will move admin endpoints onto a separate localhost-only listener.
+For remote scraping (Prometheus, etc.), use an SSH tunnel or terminate
+inside your reverse proxy with auth. The daemon refuses to bind
+`ADMIN_BIND_ADDR` to a non-loopback address.
 
 ---
 
@@ -194,7 +202,8 @@ Highlights:
 | Variable | Default | Effect |
 |---|---|---|
 | `GETH_URL` | `http://127.0.0.1:8545` | Upstream JSON-RPC |
-| `BIND_ADDR` | `127.0.0.1:8080` | Daemon listener (the hidden service forwards here) |
+| `BIND_ADDR` | `127.0.0.1:8080` | Tor-facing listener (the hidden service forwards here) |
+| `ADMIN_BIND_ADDR` | `127.0.0.1:9001` | Localhost-only listener for `/health` and `/metrics` |
 | `RUST_LOG` | `info` | tracing-subscriber filter |
 | `MAX_REQUEST_SIZE` | `1048576` | Body-size cap (1 MiB) |
 | `RATE_LIMIT_REQUESTS` | `100` | Per-(IP, source-port) bucket per window |

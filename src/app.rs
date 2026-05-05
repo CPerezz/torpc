@@ -42,6 +42,11 @@ pub struct AppConfig {
     pub geth_url: String,
     pub flashbots_url: String,
     pub bind_addr: String,
+    /// Bind address for the admin listener (`/health`, `/metrics`). Kept on
+    /// a separate socket from `bind_addr` so admin endpoints are not
+    /// reachable through the Tor hidden service — the .onion forwards only
+    /// to `bind_addr`. Default `127.0.0.1:9001`.
+    pub admin_bind_addr: String,
 
     /// Hex-encoded private key used to sign Flashbots auth headers. `None`
     /// disables MEV protection (bundles return a JSON-RPC error rather than
@@ -72,6 +77,8 @@ impl AppConfig {
         let flashbots_url = std::env::var("FLASHBOTS_URL")
             .unwrap_or_else(|_| "https://relay.flashbots.net".to_string());
         let bind_addr = std::env::var("BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:8080".to_string());
+        let admin_bind_addr =
+            std::env::var("ADMIN_BIND_ADDR").unwrap_or_else(|_| "127.0.0.1:9001".to_string());
 
         let mev_signing_key = std::env::var("FLASHBOTS_SIGNING_KEY").ok();
         let mev_relay_url =
@@ -96,6 +103,7 @@ impl AppConfig {
             geth_url,
             flashbots_url,
             bind_addr,
+            admin_bind_addr,
             mev_signing_key,
             mev_relay_url,
             mev_request_timeout,
@@ -116,6 +124,7 @@ impl AppConfig {
             geth_url,
             flashbots_url: "http://127.0.0.1:1".to_string(),
             bind_addr: "127.0.0.1:0".to_string(),
+            admin_bind_addr: "127.0.0.1:0".to_string(),
             mev_signing_key: None,
             mev_relay_url: "http://127.0.0.1:1".to_string(),
             mev_request_timeout: Duration::from_secs(2),
@@ -134,11 +143,25 @@ impl AppConfig {
     }
 }
 
-/// What `build_app` returns. Holding the cleanup `JoinHandle` lets callers
-/// abort the rate-limiter cleanup task on shutdown — the task otherwise
-/// runs until the runtime drops.
+/// What `build_app` returns. Two routers (one Tor-facing, one operator-only)
+/// share the same `MevProxyState` so `/metrics` reflects live activity from
+/// the public router. The cleanup `JoinHandle` lets callers abort the
+/// rate-limiter cleanup task on shutdown.
+///
+/// **Why two routers?** `/health` and `/metrics` leak operator-side state
+/// (component circuit-breaker status, request volume counters, uptime,
+/// version) and have no consumer over Tor. Splitting them onto a separate
+/// localhost-bound listener means anyone reaching the .onion sees a 404
+/// for those paths.
 pub struct BuiltApp {
+    /// Tor-facing router: `/rpc`, `/rpc/flashbots`, static UI, full security
+    /// middleware stack. This is what `bind_addr` listens on.
     pub app: Router,
+    /// Operator-only router: `/health`, `/metrics`. Bound to `admin_bind_addr`
+    /// (default 127.0.0.1:9001). Carries security headers but skips the
+    /// JSON-RPC timeout / body-limit / rate-limit layers — those are noise
+    /// for a localhost admin surface.
+    pub admin_app: Router,
     pub cleanup_task: tokio::task::JoinHandle<()>,
 }
 
@@ -225,10 +248,12 @@ pub async fn build_app(config: AppConfig) -> anyhow::Result<BuiltApp> {
         }
     });
 
-    // ----- Router assembly --------------------------------------------------
+    // ----- Public (Tor-facing) router ---------------------------------------
+    // /health and /metrics deliberately live on the admin router, NOT here.
+    // Reaching them through the .onion would leak component state, request
+    // volume, uptime, and version to anonymous Tor visitors. Path resolution
+    // is route-tree based — they will 404 on this router.
     let app = Router::new()
-        .route("/health", get(health_check))
-        .route("/metrics", get(security_metrics))
         .route(
             "/rpc",
             post({
@@ -252,7 +277,7 @@ pub async fn build_app(config: AppConfig) -> anyhow::Result<BuiltApp> {
             rate_limit_middleware,
         ))
         .nest_service("/", ServeDir::new(&config.static_dir))
-        .with_state(mev_state)
+        .with_state(mev_state.clone())
         .layer(ConcurrencyLimitLayer::new(config.max_concurrent))
         .layer(DefaultBodyLimit::max(config.security.max_body_size))
         .layer(middleware::from_fn_with_state(
@@ -261,16 +286,31 @@ pub async fn build_app(config: AppConfig) -> anyhow::Result<BuiltApp> {
         ))
         .layer(middleware::from_fn(security_headers_middleware))
         // Static CSP — see `STATIC_CSP` in `security.rs` for rationale on
-        // why this is no longer built from runtime env. Operators who
-        // customise the discovery server's port and want the wallet
-        // auto-detect to pass CSP must override via a reverse proxy.
+        // why this is no longer built from runtime env.
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::CONTENT_SECURITY_POLICY,
             axum::http::HeaderValue::from_static(STATIC_CSP),
         ))
         .layer(TraceLayer::new_for_http());
 
-    Ok(BuiltApp { app, cleanup_task })
+    // ----- Admin (localhost-only) router -----------------------------------
+    // Shares `mev_state` with the public router so `/metrics` reflects live
+    // counters incremented by request handling. We deliberately skip the
+    // JSON-RPC timeout, body-limit, and rate-limit middlewares — those are
+    // designed for adversarial inputs and add no value on a localhost
+    // operator surface. Security headers stay on for defense in depth.
+    let admin_app = Router::new()
+        .route("/health", get(health_check))
+        .route("/metrics", get(security_metrics))
+        .with_state(mev_state)
+        .layer(middleware::from_fn(security_headers_middleware))
+        .layer(TraceLayer::new_for_http());
+
+    Ok(BuiltApp {
+        app,
+        admin_app,
+        cleanup_task,
+    })
 }
 
 fn env_u64(name: &str, default: u64) -> u64 {
