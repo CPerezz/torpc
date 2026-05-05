@@ -10,6 +10,10 @@ dev-debug.log
 # cloned without leaking the original author's planning artifacts.
 prd.txt
 
+# Per-developer Claude Code project instructions. Each contributor keeps
+# their own; not part of the source-controlled state.
+CLAUDE.md
+
 # ----- Dependency directories -------------------------------------------
 node_modules/
 
