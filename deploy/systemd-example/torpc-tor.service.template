@@ -4,7 +4,7 @@ After=network.target
 Documentation=https://github.com/example/torpc
 
 [Service]
-# `scripts/install-systemd.sh` substitutes ${USER} and ${TORPC_HOME}.
+# `deploy/systemd-example/install-systemd.sh` substitutes ${USER} and ${TORPC_HOME}.
 Type=simple
 User=${USER}
 WorkingDirectory=${TORPC_HOME}

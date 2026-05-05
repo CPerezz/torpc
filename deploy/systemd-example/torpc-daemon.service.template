@@ -5,7 +5,7 @@ Wants=torpc-tor.service
 After=torpc-tor.service
 
 [Service]
-# `scripts/install-systemd.sh` substitutes ${USER} and ${TORPC_HOME}.
+# `deploy/systemd-example/install-systemd.sh` substitutes ${USER} and ${TORPC_HOME}.
 Type=simple
 User=${USER}
 WorkingDirectory=${TORPC_HOME}

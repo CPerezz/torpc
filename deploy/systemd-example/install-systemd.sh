@@ -1,17 +1,25 @@
 #!/usr/bin/env bash
-# Generate concrete systemd unit files from the templates by substituting
-# ${USER} and ${TORPC_HOME} from the current environment, then either
-# print to stdout or install into /etc/systemd/system/ (with sudo).
+# EXAMPLE / TESTING ONLY — see README.md in this directory.
+#
+# Renders torpc-tor.service.template and torpc-daemon.service.template by
+# substituting ${USER} and ${TORPC_HOME}, then either prints the result to
+# stdout or installs into /etc/systemd/system/ (with sudo).
+#
+# This is a minimal scaffold for testing systemd integration on a dev box
+# or staging host. It is NOT a production-blessed deployment path. The
+# templates carry a reasonable hardening baseline but no high-availability,
+# secret management, or upgrade story.
 #
 # Usage:
-#   scripts/install-systemd.sh                       # print rendered units
-#   scripts/install-systemd.sh --install             # render + sudo install + reload
-#   scripts/install-systemd.sh --user alice --home /srv/torpc --install
+#   deploy/systemd-example/install-systemd.sh                 # print rendered units
+#   deploy/systemd-example/install-systemd.sh --install       # render + sudo install + daemon-reload
+#   deploy/systemd-example/install-systemd.sh --user alice --home /srv/torpc --install
 
 set -euo pipefail
 
 USER_NAME="${USER:-}"
-TORPC_HOME="${PWD}"
+# Default to the repo root (two levels up from this script).
+TORPC_HOME="$(cd "$(dirname "$0")/../.." && pwd)"
 DO_INSTALL=false
 
 while [[ $# -gt 0 ]]; do
@@ -39,7 +47,8 @@ render() {
         "$template"
 }
 
-cd "$(dirname "$0")/.."
+# Templates live next to this script.
+cd "$(dirname "$0")"
 
 for template in torpc-tor.service.template torpc-daemon.service.template; do
     if [[ ! -f "$template" ]]; then
