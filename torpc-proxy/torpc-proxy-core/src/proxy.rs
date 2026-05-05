@@ -17,7 +17,7 @@ use anyhow::{Context, Result};
 use bytes::Bytes;
 use http_body_util::{BodyExt, Full, Limited};
 use hyper::body::Incoming;
-use hyper::header::{HeaderName, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, HOST};
+use hyper::header::{HeaderName, HeaderValue, AUTHORIZATION, CONTENT_LENGTH, HOST, USER_AGENT};
 use hyper::service::service_fn;
 use hyper::{Method, Request, Response, StatusCode};
 use hyper_util::rt::TokioIo;
@@ -55,6 +55,37 @@ fn is_hop_by_hop(name: &HeaderName) -> bool {
             | "transfer-encoding"
             | "upgrade"
     )
+}
+
+/// Headers a wallet may attach that would fingerprint the user when forwarded
+/// over Tor. The whole point of routing through Tor is unlinkability; sending
+/// `User-Agent: MetaMask/12.3 ...` plus `Accept-Language: en-US,fr;q=0.9` plus
+/// `Sec-CH-UA: "Chromium";v="135"` defeats it on a single request.
+///
+/// Authorization and Cookie are stripped to avoid leaking wallet-host secrets
+/// to the operator of the onion. RPC over a raw .onion shouldn't need either.
+fn is_wallet_fingerprint(name: &HeaderName) -> bool {
+    let n = name.as_str().to_ascii_lowercase();
+    matches!(
+        n.as_str(),
+        "user-agent"
+            | "accept-language"
+            | "origin"
+            | "referer"
+            | "cookie"
+            | "authorization"
+            | "dnt"
+            | "x-forwarded-for"
+            | "x-real-ip"
+    ) || n.starts_with("sec-")
+        || n.starts_with("x-wallet-")
+}
+
+/// Synthetic User-Agent attached to forwarded requests so the upstream sees a
+/// consistent, non-identifying client. Versioned so an operator who upgrades
+/// the proxy can correlate logs without per-user per-wallet variance.
+fn forwarded_user_agent() -> HeaderValue {
+    HeaderValue::from_static(concat!("torpc-proxy/", env!("CARGO_PKG_VERSION")))
 }
 
 #[derive(Debug, Clone, serde::Serialize, serde::Deserialize)]
@@ -260,12 +291,16 @@ async fn do_proxy(
     let mut builder = Request::builder().method(parts.method.clone()).uri(path_and_query);
 
     for (name, value) in parts.headers.iter() {
-        if name == HOST || is_hop_by_hop(name) {
+        if name == HOST || is_hop_by_hop(name) || is_wallet_fingerprint(name) {
             continue;
         }
         builder = builder.header(name, value);
     }
     builder = builder.header(HOST, &config.onion_endpoint);
+    // Always set a synthetic User-Agent. We've stripped the wallet's own UA
+    // above; without this the upstream gets no UA at all (subtly fingerprintable
+    // — most clients send *something*).
+    builder = builder.header(USER_AGENT, forwarded_user_agent());
 
     // Read the request body up to the cap.
     let body_bytes = match Limited::new(body, MAX_RESPONSE_BYTES).collect().await {
@@ -504,9 +539,73 @@ mod tests {
             let name: HeaderName = h.parse().unwrap();
             assert!(is_hop_by_hop(&name), "{} should be hop-by-hop", h);
         }
-        for h in &["content-type", "x-flashbots-signature", "user-agent"] {
+        for h in &["content-type", "x-flashbots-signature"] {
             let name: HeaderName = h.parse().unwrap();
             assert!(!is_hop_by_hop(&name), "{} should be end-to-end", h);
+        }
+    }
+
+    #[test]
+    fn wallet_fingerprint_headers_are_stripped() {
+        // Anything that would identify the wallet, the user, or the local
+        // browser fingerprint to the operator of the .onion.
+        for h in &[
+            "user-agent",
+            "User-Agent",
+            "accept-language",
+            "origin",
+            "referer",
+            "cookie",
+            "authorization",
+            "dnt",
+            "x-forwarded-for",
+            "x-real-ip",
+            "sec-fetch-site",
+            "sec-fetch-mode",
+            "sec-ch-ua",
+            "x-wallet-name",
+        ] {
+            let name: HeaderName = h.to_lowercase().parse().unwrap();
+            assert!(
+                is_wallet_fingerprint(&name),
+                "{} must be classified as wallet-fingerprint and stripped",
+                h
+            );
+        }
+    }
+
+    #[test]
+    fn benign_headers_are_forwarded() {
+        // These must NOT be stripped — they're either required for the JSON-RPC
+        // protocol (`content-type`) or actively load-bearing (`x-flashbots-*`).
+        for h in &[
+            "content-type",
+            "content-length",
+            "accept",
+            "x-flashbots-signature",
+        ] {
+            let name: HeaderName = h.parse().unwrap();
+            assert!(
+                !is_wallet_fingerprint(&name),
+                "{} must not be classified as wallet-fingerprint",
+                h
+            );
+        }
+    }
+
+    #[test]
+    fn forwarded_user_agent_is_synthetic_and_versioned() {
+        let ua = forwarded_user_agent();
+        let s = ua.to_str().unwrap();
+        assert!(s.starts_with("torpc-proxy/"));
+        // Must not include any wallet/vendor identifier.
+        for forbidden in &["MetaMask", "Coinbase", "Mozilla", "Chrome", "Tauri"] {
+            assert!(
+                !s.contains(forbidden),
+                "synthetic UA should not contain {}: {}",
+                forbidden,
+                s
+            );
         }
     }
 }
