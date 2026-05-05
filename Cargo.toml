@@ -41,4 +41,9 @@ rand = "0.8"
 mockito = "1.2"
 tempfile = "3.8"
 axum-test = "14.0"
+# Send real signals (SIGTERM, SIGINT) to spawned daemon subprocesses in
+# integration tests. `Child::kill()` only sends SIGKILL, which bypasses
+# the graceful-shutdown path we want to verify.
+[target.'cfg(unix)'.dev-dependencies]
+nix = { version = "0.29", features = ["signal"] }
 

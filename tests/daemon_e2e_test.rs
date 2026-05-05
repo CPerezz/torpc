@@ -29,13 +29,20 @@ async fn make_server(geth_url: String, tweak: impl FnOnce(&mut AppConfig)) -> Te
     TestServer::new(built.app).expect("TestServer must accept the production router")
 }
 
-/// Builds a mockito mock that REQUIRES at least one matching call. Tests
-/// then call `mock.assert()` at the end to prove the upstream was actually
-/// hit — without this, a mutation that bypassed the proxy entirely and
-/// returned the same response shape would still pass.
+/// Builds a mockito mock that REQUIRES at least one matching call. The
+/// `match_body` predicate additionally validates the daemon sent a
+/// well-formed `eth_blockNumber` JSON-RPC request — without this, a
+/// mutation that proxied to upstream Geth but with a corrupted body would
+/// still pass (mockito would 200 anything; the test would only catch
+/// gross response-shape errors).
 fn mock_geth_block_number(server: &mut mockito::ServerGuard, value: &str) -> mockito::Mock {
     server
         .mock("POST", "/")
+        .match_header("content-type", mockito::Matcher::Regex("application/json.*".into()))
+        .match_body(mockito::Matcher::PartialJson(serde_json::json!({
+            "jsonrpc": "2.0",
+            "method": "eth_blockNumber",
+        })))
         .with_status(200)
         .with_header("content-type", "application/json")
         .with_body(format!(r#"{{"jsonrpc":"2.0","result":"{}","id":1}}"#, value))
