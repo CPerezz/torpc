@@ -15,7 +15,7 @@ use std::sync::Arc;
 use torpc::mev::mev_handler::MevProxyState;
 use torpc::proxy::ProxyState;
 use torpc::security::{
-    config_js, health_check, security_headers_middleware, security_metrics, RuntimeWebConfig,
+    health_check, security_headers_middleware, security_metrics, STATIC_CSP,
 };
 
 /// Build a router with `/health` and `/metrics` wired to a `ProxyState`
@@ -33,13 +33,7 @@ fn router_with_geth(geth_url: String) -> Router {
         mev_client: None,
     });
 
-    let web_config = RuntimeWebConfig {
-        discovery_url: "http://localhost:8081/api/discovery".to_string(),
-        discovery_timeout_ms: 2000,
-        fallback_rpc_url: "http://localhost:8545".to_string(),
-    };
-    let csp = axum::http::HeaderValue::from_str(&web_config.build_csp())
-        .expect("test CSP must be a valid header value");
+    let csp = axum::http::HeaderValue::from_static(STATIC_CSP);
 
     Router::new()
         .route("/health", get(health_check))
@@ -171,35 +165,6 @@ async fn unknown_path_returns_404_with_security_headers() {
     let response = app.get("/does-not-exist").await;
     assert_eq!(response.status_code(), 404);
     assert_eq!(response.header("x-content-type-options"), "nosniff");
-}
-
-/// End-to-end test for `/config.js`: the daemon advertises the runtime
-/// discovery URL via this endpoint, and the static frontend reads it.
-/// Verifies content type, cache hint, and JS shape so a future change to
-/// `RuntimeWebConfig` doesn't silently break the wallet auto-detect flow.
-#[tokio::test]
-async fn config_js_returns_runtime_window_torpc_config() {
-    let cfg = Arc::new(RuntimeWebConfig {
-        discovery_url: "http://localhost:7777/api/discovery".to_string(),
-        discovery_timeout_ms: 1234,
-        fallback_rpc_url: "http://localhost:5555".to_string(),
-    });
-    let app = Router::new().route("/config.js", get(config_js)).with_state(cfg);
-    let server = TestServer::new(app).unwrap();
-
-    let response = server.get("/config.js").await;
-    assert_eq!(response.status_code(), 200);
-    assert_eq!(
-        response.header("content-type"),
-        "application/javascript; charset=utf-8"
-    );
-    assert_eq!(response.header("cache-control"), "public, max-age=60");
-
-    let body = response.text();
-    assert!(body.starts_with("window.TorpcConfig = "));
-    assert!(body.contains("\"discoveryUrl\":\"http://localhost:7777/api/discovery\""));
-    assert!(body.contains("\"discoveryTimeoutMs\":1234"));
-    assert!(body.contains("\"fallbackRpcUrl\":\"http://localhost:5555\""));
 }
 
 #[tokio::test]

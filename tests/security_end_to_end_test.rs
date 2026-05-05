@@ -16,7 +16,7 @@ use axum_test::TestServer;
 use serde_json::{json, Value};
 use std::time::Duration;
 use torpc::security::{
-    json_rpc_timeout_middleware, security_headers_middleware, RuntimeWebConfig,
+    json_rpc_timeout_middleware, security_headers_middleware, STATIC_CSP,
 };
 
 /// Tiny mock JSON-RPC handler. Mirrors a minimal subset of the real one so
@@ -38,14 +38,7 @@ async fn mock_rpc(Json(payload): Json<Value>) -> Result<Json<Value>, StatusCode>
 /// Build a router shaped exactly like production except the RPC handler is
 /// the small `mock_rpc` above.
 fn create_secure_test_app(body_limit: usize, timeout: Duration) -> Router {
-    let csp = axum::http::HeaderValue::from_str(
-        &RuntimeWebConfig {
-            discovery_url: "http://localhost:8081/api/discovery".to_string(),
-            discovery_timeout_ms: 2000,
-            fallback_rpc_url: "http://localhost:8545".to_string(),
-        }
-        .build_csp(),
-    )
+    let csp = axum::http::HeaderValue::from_str(STATIC_CSP)
     .unwrap();
 
     Router::new()

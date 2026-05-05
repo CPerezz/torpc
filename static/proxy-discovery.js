@@ -16,15 +16,19 @@
     // the default config saw inconsistent fallbacks per wallet.
     var DEFAULT_FALLBACK_URL = "http://localhost:8545";
 
-    // Discovery endpoint defaults — overridden by `window.TorpcConfig` if a
-    // future Phase 7 follow-up serves `/config.js` from the daemon.
-    function discoveryUrl() {
-        return (root.TorpcConfig && root.TorpcConfig.discoveryUrl)
-            || "http://localhost:8081/api/discovery";
-    }
-    function discoveryTimeoutMs() {
-        return (root.TorpcConfig && root.TorpcConfig.discoveryTimeoutMs) || 2000;
-    }
+    // Discovery endpoint and timeout are now hardcoded. The daemon used
+    // to serve a `/config.js` snippet that overrode these via
+    // `window.TorpcConfig`, so operators could change the discovery
+    // server's port via env. That mechanism was removed: the discovery
+    // server is itself default-disabled, almost no operator changes the
+    // port, and the wallet helpers' `fetch` to a non-running discovery
+    // server falls through to `DEFAULT_FALLBACK_URL` regardless.
+    //
+    // If you DO run discovery on a non-default port, edit these literals
+    // and the daemon's CSP (in `src/security.rs::STATIC_CSP`).
+    var DISCOVERY_URL = "http://localhost:8081/api/discovery";
+    var DISCOVERY_TIMEOUT_MS = 2000;
+
     function discoveryToken() {
         return root.TorpcDiscoveryToken || "";
     }
@@ -36,14 +40,14 @@
      */
     async function queryProxyDiscovery() {
         var controller = new AbortController();
-        var timeoutId = setTimeout(function () { controller.abort(); }, discoveryTimeoutMs());
+        var timeoutId = setTimeout(function () { controller.abort(); }, DISCOVERY_TIMEOUT_MS);
 
         try {
             var headers = { "Accept": "application/json" };
             var token = discoveryToken();
             if (token) headers["X-Torpc-Token"] = token;
 
-            var response = await fetch(discoveryUrl(), {
+            var response = await fetch(DISCOVERY_URL, {
                 method: "GET",
                 mode: "cors",
                 headers: headers,

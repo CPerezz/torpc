@@ -31,8 +31,8 @@ use crate::mev::{create_mev_client, MevConfig};
 use crate::proxy::{self, handle_rpc, ProxyState};
 use crate::rate_limit::{rate_limit_middleware, RateLimitConfig, RateLimiter};
 use crate::security::{
-    config_js, health_check, json_rpc_timeout_middleware, security_headers_middleware,
-    security_metrics, RuntimeWebConfig, SecurityConfig,
+    health_check, json_rpc_timeout_middleware, security_headers_middleware, security_metrics,
+    SecurityConfig, STATIC_CSP,
 };
 
 /// All operator-configurable knobs the daemon needs at startup. Construct
@@ -56,7 +56,6 @@ pub struct AppConfig {
     pub max_concurrent: usize,
 
     pub security: SecurityConfig,
-    pub web: RuntimeWebConfig,
 
     /// Path to the static directory served at `/`. Tests override to skip
     /// the wallet-helper UI; production uses `static/`.
@@ -106,7 +105,6 @@ impl AppConfig {
             write_method_limit_window,
             max_concurrent,
             security: SecurityConfig::from_env(),
-            web: RuntimeWebConfig::from_env(),
             static_dir: "static".to_string(),
         }
     }
@@ -130,11 +128,6 @@ impl AppConfig {
             write_method_limit_window: Duration::from_secs(60),
             max_concurrent: 32,
             security: SecurityConfig::default(),
-            web: RuntimeWebConfig {
-                discovery_url: "http://localhost:8081/api/discovery".to_string(),
-                discovery_timeout_ms: 2000,
-                fallback_rpc_url: "http://localhost:8545".to_string(),
-            },
             // Tests typically don't need the wallet-helper UI; point at a
             // path that exists (the same dir is fine).
             static_dir: "static".to_string(),
@@ -173,10 +166,6 @@ pub async fn build_app(config: AppConfig) -> anyhow::Result<BuiltApp> {
         config.security.max_body_size / 1024,
         config.security.request_timeout.as_secs(),
         config.security.strict_headers
-    );
-    info!(
-        "Runtime web config: discovery_url={}, fallback_rpc_url={}",
-        config.web.discovery_url, config.web.fallback_rpc_url
     );
 
     // ----- ProxyState -------------------------------------------------------
@@ -234,18 +223,8 @@ pub async fn build_app(config: AppConfig) -> anyhow::Result<BuiltApp> {
         }
     });
 
-    // ----- Web/runtime config -> CSP + /config.js -------------------------
-    let web_config = Arc::new(config.web.clone());
-    let csp_header = axum::http::HeaderValue::from_str(&web_config.build_csp())
-        .context("CSP header value contained invalid bytes")?;
-
     // ----- Router assembly --------------------------------------------------
-    let config_router = Router::new()
-        .route("/config.js", get(config_js))
-        .with_state(web_config.clone());
-
     let app = Router::new()
-        .merge(config_router)
         .route("/health", get(health_check))
         .route("/metrics", get(security_metrics))
         .route(
@@ -279,9 +258,13 @@ pub async fn build_app(config: AppConfig) -> anyhow::Result<BuiltApp> {
             json_rpc_timeout_middleware,
         ))
         .layer(middleware::from_fn(security_headers_middleware))
+        // Static CSP — see `STATIC_CSP` in `security.rs` for rationale on
+        // why this is no longer built from runtime env. Operators who
+        // customise the discovery server's port and want the wallet
+        // auto-detect to pass CSP must override via a reverse proxy.
         .layer(SetResponseHeaderLayer::overriding(
             axum::http::header::CONTENT_SECURITY_POLICY,
-            csp_header,
+            axum::http::HeaderValue::from_static(STATIC_CSP),
         ))
         .layer(TraceLayer::new_for_http());
 

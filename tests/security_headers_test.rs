@@ -17,7 +17,7 @@ use axum::{
 };
 use axum_test::TestServer;
 use serde_json::json;
-use torpc::security::{security_headers_middleware, RuntimeWebConfig};
+use torpc::security::{security_headers_middleware, STATIC_CSP};
 
 async fn ok_text() -> &'static str {
     "test response"
@@ -32,15 +32,9 @@ async fn error_handler() -> Result<&'static str, StatusCode> {
 }
 
 /// Builds a router that mirrors `main.rs`'s wiring of the headers middleware
-/// + dynamic CSP layer. Tests assert against this exact stack.
+/// + static CSP layer. Tests assert against this exact stack.
 fn create_test_router() -> Router {
-    let web_config = RuntimeWebConfig {
-        discovery_url: "http://localhost:8081/api/discovery".to_string(),
-        discovery_timeout_ms: 2000,
-        fallback_rpc_url: "http://localhost:8545".to_string(),
-    };
-    let csp = axum::http::HeaderValue::from_str(&web_config.build_csp())
-        .expect("CSP must be a valid header value");
+    let csp = axum::http::HeaderValue::from_static(STATIC_CSP);
 
     Router::new()
         .route("/text", get(ok_text))
@@ -86,9 +80,17 @@ fn assert_security_headers(response: &axum_test::TestResponse) {
         "CSP must keep frame-ancestors locked down: {}",
         csp
     );
+    // After RuntimeWebConfig deletion, CSP no longer includes the
+    // discovery URL — `connect-src 'self'` covers same-origin /rpc,
+    // and the discovery server is itself default-disabled.
     assert!(
-        csp.contains("connect-src 'self' http://localhost:8081/api/discovery"),
-        "CSP must allow the resolved discovery URL: {}",
+        csp.contains("connect-src 'self'"),
+        "CSP must allow same-origin connect: {}",
+        csp
+    );
+    assert!(
+        !csp.contains("http://localhost:8081"),
+        "CSP must NOT hardcode the discovery URL after the RuntimeWebConfig removal: {}",
         csp
     );
 }

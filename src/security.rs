@@ -8,6 +8,27 @@ use serde_json::json;
 use std::time::Duration;
 use tracing::warn;
 
+/// Static Content-Security-Policy applied to every response by the
+/// `SetResponseHeaderLayer` in `app.rs`. The previous code built this
+/// string at startup from `RuntimeWebConfig` so an opt-in discovery
+/// server on a non-default port could be reflected in `connect-src`.
+/// That mechanism was deleted because (a) the discovery server is
+/// default-disabled, (b) almost no operator changes the port, and (c)
+/// the static frontend's only legitimate cross-origin fetch is to
+/// `/rpc`, which `'self'` already covers.
+///
+/// Operators who do customise the discovery port and want the wallet
+/// auto-detect flow to work must override this CSP via a reverse proxy
+/// in front of the daemon, or fork the constant.
+pub const STATIC_CSP: &str = "default-src 'self'; \
+     connect-src 'self'; \
+     style-src 'self' 'unsafe-inline'; \
+     script-src 'self'; \
+     img-src 'self' data:; \
+     frame-ancestors 'none'; \
+     base-uri 'self'; \
+     form-action 'self'";
+
 /// Security configuration
 #[derive(Debug, Clone)]
 pub struct SecurityConfig {
@@ -226,92 +247,6 @@ pub async fn security_metrics(
     })))
 }
 
-/// Runtime configuration consumed by both the dynamic CSP header and the
-/// `/config.js` endpoint, so the static frontend always sees the same
-/// discovery URL the daemon's CSP will let it talk to. Built once at
-/// startup from env vars.
-#[derive(Debug, Clone)]
-pub struct RuntimeWebConfig {
-    pub discovery_url: String,
-    pub discovery_timeout_ms: u32,
-    pub fallback_rpc_url: String,
-}
-
-impl RuntimeWebConfig {
-    /// Read web-facing runtime knobs from the environment, falling back to
-    /// the documented defaults. Variable names match `.env.example`.
-    pub fn from_env() -> Self {
-        let discovery_port = std::env::var("TORPC_DISCOVERY_PORT")
-            .ok()
-            .and_then(|s| s.parse::<u16>().ok())
-            .unwrap_or(8081);
-        let discovery_timeout_ms = std::env::var("DISCOVERY_TIMEOUT_MS")
-            .ok()
-            .and_then(|s| s.parse::<u32>().ok())
-            .unwrap_or(2000);
-        let fallback_rpc_url = std::env::var("FALLBACK_RPC_URL")
-            .unwrap_or_else(|_| "http://localhost:8545".to_string());
-        Self {
-            discovery_url: format!("http://localhost:{}/api/discovery", discovery_port),
-            discovery_timeout_ms,
-            fallback_rpc_url,
-        }
-    }
-
-    /// Build the CSP header value that lets the static frontend reach the
-    /// discovery endpoint. The previous static CSP hardcoded port 8081, so
-    /// changing `TORPC_DISCOVERY_PORT` silently broke the wallet flows.
-    pub fn build_csp(&self) -> String {
-        format!(
-            "default-src 'self'; \
-             connect-src 'self' {discovery}; \
-             style-src 'self' 'unsafe-inline'; \
-             script-src 'self'; \
-             img-src 'self' data:; \
-             frame-ancestors 'none'; \
-             base-uri 'self'; \
-             form-action 'self'",
-            discovery = self.discovery_url,
-        )
-    }
-
-    /// Render the JS snippet served at `/config.js`. Embedding the values
-    /// directly (not as a template) avoids any escaping foot-gun: the only
-    /// dynamic field is `fallback_rpc_url`, which is sanitized via
-    /// `serde_json` so even a malicious env var can't break out.
-    pub fn render_config_js(&self) -> String {
-        let payload = json!({
-            "discoveryUrl": self.discovery_url,
-            "discoveryTimeoutMs": self.discovery_timeout_ms,
-            "fallbackRpcUrl": self.fallback_rpc_url,
-        });
-        format!("window.TorpcConfig = {};\n", payload)
-    }
-}
-
-/// `GET /config.js` — serves the runtime snippet with proper JS content
-/// type. Cached by the browser for 60s; long enough to avoid hammering the
-/// daemon, short enough that an operator's env-var change is reflected on
-/// the next browser refresh.
-pub async fn config_js(
-    axum::extract::State(config): axum::extract::State<std::sync::Arc<RuntimeWebConfig>>,
-) -> impl IntoResponse {
-    (
-        StatusCode::OK,
-        [
-            (
-                axum::http::header::CONTENT_TYPE,
-                HeaderValue::from_static("application/javascript; charset=utf-8"),
-            ),
-            (
-                axum::http::header::CACHE_CONTROL,
-                HeaderValue::from_static("public, max-age=60"),
-            ),
-        ],
-        config.render_config_js(),
-    )
-}
-
 /// Replacement for `tower_http::TimeoutLayer` that emits a JSON-RPC 2.0
 /// error body on timeout (`-32001 "upstream timeout"`) so wallet clients
 /// see structured JSON instead of an empty `408`. Use by passing the
@@ -401,50 +336,6 @@ mod tests {
         assert_eq!(json["oversized_requests"], 1);
         assert_eq!(json["invalid_methods"], 1);
         assert_eq!(json["suspicious_patterns"], 1);
-    }
-
-    #[test]
-    fn test_runtime_web_config_renders_consistent_url_into_csp_and_js() {
-        // Both the CSP `connect-src` and the JS `discoveryUrl` must use the
-        // same URL — that's the whole point of `RuntimeWebConfig`.
-        let cfg = RuntimeWebConfig {
-            discovery_url: "http://localhost:9999/api/discovery".to_string(),
-            discovery_timeout_ms: 1500,
-            fallback_rpc_url: "http://example.test:8545".to_string(),
-        };
-
-        let csp = cfg.build_csp();
-        assert!(csp.contains("connect-src 'self' http://localhost:9999/api/discovery"));
-        assert!(csp.contains("default-src 'self'"));
-        assert!(csp.contains("frame-ancestors 'none'"));
-
-        let js = cfg.render_config_js();
-        assert!(js.starts_with("window.TorpcConfig = "));
-        assert!(js.contains("\"discoveryUrl\":\"http://localhost:9999/api/discovery\""));
-        assert!(js.contains("\"discoveryTimeoutMs\":1500"));
-        assert!(js.contains("\"fallbackRpcUrl\":\"http://example.test:8545\""));
-        assert!(js.ends_with(";\n"));
-    }
-
-    #[test]
-    fn test_runtime_web_config_from_env_uses_documented_defaults() {
-        // Snapshot any prior values, clear them, then restore — running tests
-        // in parallel might otherwise race on these globals.
-        let prev_port = std::env::var("TORPC_DISCOVERY_PORT").ok();
-        let prev_timeout = std::env::var("DISCOVERY_TIMEOUT_MS").ok();
-        let prev_rpc = std::env::var("FALLBACK_RPC_URL").ok();
-        std::env::remove_var("TORPC_DISCOVERY_PORT");
-        std::env::remove_var("DISCOVERY_TIMEOUT_MS");
-        std::env::remove_var("FALLBACK_RPC_URL");
-
-        let cfg = RuntimeWebConfig::from_env();
-        assert_eq!(cfg.discovery_url, "http://localhost:8081/api/discovery");
-        assert_eq!(cfg.discovery_timeout_ms, 2000);
-        assert_eq!(cfg.fallback_rpc_url, "http://localhost:8545");
-
-        if let Some(v) = prev_port { std::env::set_var("TORPC_DISCOVERY_PORT", v); }
-        if let Some(v) = prev_timeout { std::env::set_var("DISCOVERY_TIMEOUT_MS", v); }
-        if let Some(v) = prev_rpc { std::env::set_var("FALLBACK_RPC_URL", v); }
     }
 
     /// Round-trips a request through the JSON-RPC timeout middleware. The

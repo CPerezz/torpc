@@ -13,7 +13,7 @@ use axum_test::TestServer;
 use serde_json::json;
 use std::time::Duration;
 use torpc::security::{
-    json_rpc_timeout_middleware, security_headers_middleware, RuntimeWebConfig,
+    json_rpc_timeout_middleware, security_headers_middleware, STATIC_CSP,
 };
 
 async fn slow_handler() -> &'static str {
@@ -26,15 +26,7 @@ async fn echo_handler(axum::Json(body): axum::Json<serde_json::Value>) -> axum::
 }
 
 fn build_router(timeout: Duration, body_limit: usize) -> Router {
-    let csp = axum::http::HeaderValue::from_str(
-        &RuntimeWebConfig {
-            discovery_url: "http://localhost:8081/api/discovery".to_string(),
-            discovery_timeout_ms: 2000,
-            fallback_rpc_url: "http://localhost:8545".to_string(),
-        }
-        .build_csp(),
-    )
-    .unwrap();
+    let csp = axum::http::HeaderValue::from_static(STATIC_CSP);
 
     Router::new()
         .route("/slow", post(slow_handler))

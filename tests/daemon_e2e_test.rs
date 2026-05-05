@@ -3,9 +3,8 @@
 //! These tests drive the *exact* router that `main.rs` serves, via
 //! `torpc::app::build_app`, against a mockito-backed Geth. They catch
 //! integration bugs the layer-specific tests can't: layer ordering
-//! mistakes in `main.rs`, route registration regressions, missing CSP on
-//! some response paths, mismatches between the dynamic CSP and the
-//! `/config.js` snippet.
+//! mistakes in `main.rs`, route registration regressions, missing CSP
+//! on some response paths.
 //!
 //! No external services required — runs in `make test` and CI.
 
@@ -17,7 +16,7 @@ use serde_json::{json, Value};
 
 use torpc::app::{build_app, AppConfig};
 use torpc::rate_limit::RateLimitConfig;
-use torpc::security::{RuntimeWebConfig, SecurityConfig};
+use torpc::security::SecurityConfig;
 
 /// Make a `TestServer` driving the real production router with the given
 /// Geth URL. `tweak` lets a test mutate the default `AppConfig` before
@@ -153,31 +152,6 @@ async fn metrics_endpoint_exposes_live_counters() {
     let body: Value = server.get("/metrics").await.json();
     assert_eq!(body["security_metrics"]["invalid_methods"], 1);
     assert_eq!(body["security_metrics"]["blocked_requests_total"], 1);
-}
-
-#[tokio::test]
-async fn config_js_advertises_the_runtime_discovery_url() {
-    let mut geth = Server::new_async().await;
-    let _m = mock_geth_block_number(&mut geth, "0x1");
-
-    let server = make_server(geth.url(), |c| {
-        c.web = RuntimeWebConfig {
-            discovery_url: "http://localhost:7777/api/discovery".to_string(),
-            discovery_timeout_ms: 1000,
-            fallback_rpc_url: "http://localhost:6666".to_string(),
-        };
-    })
-    .await;
-
-    let response = server.get("/config.js").await;
-    assert_eq!(response.status_code(), 200);
-    assert_eq!(
-        response.header("content-type"),
-        "application/javascript; charset=utf-8"
-    );
-    let body = response.text();
-    assert!(body.contains("\"discoveryUrl\":\"http://localhost:7777/api/discovery\""));
-    assert!(body.contains("\"fallbackRpcUrl\":\"http://localhost:6666\""));
 }
 
 // -----------------------------------------------------------------------------

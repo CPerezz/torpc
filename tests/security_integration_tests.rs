@@ -26,7 +26,7 @@ use std::time::Duration;
 use torpc::{
     mev::mev_handler::MevProxyState,
     proxy::{handle_rpc, ProxyState},
-    security::{health_check, security_headers_middleware, security_metrics, RuntimeWebConfig},
+    security::{health_check, security_headers_middleware, security_metrics, STATIC_CSP},
 };
 
 /// Builds a router that mirrors `main.rs`'s wiring of all security
@@ -48,13 +48,7 @@ fn build_router(geth_url: String, max_body_size: usize, write_limit: u32) -> Rou
         mev_client: None,
     });
 
-    let web_config = RuntimeWebConfig {
-        discovery_url: "http://localhost:8081/api/discovery".to_string(),
-        discovery_timeout_ms: 2000,
-        fallback_rpc_url: "http://localhost:8545".to_string(),
-    };
-    let csp = axum::http::HeaderValue::from_str(&web_config.build_csp())
-        .expect("CSP must be a valid header value");
+    let csp = axum::http::HeaderValue::from_static(STATIC_CSP);
 
     Router::new()
         .route("/health", get(health_check))
