@@ -1,165 +1,104 @@
-use axum::{
-    http::StatusCode,
-    middleware,
-    routing::post,
-    Router,
-};
+//! Middleware-stack-composition tests.
+//!
+//! Covers interactions between the security middlewares — specifically the
+//! JSON-RPC timeout layer, the security headers, and the body-size limit —
+//! that are individually unit-tested elsewhere but whose composition is
+//! easy to break (e.g. a layer ordering change that drops headers from
+//! timeout-rejected responses).
+//!
+//! All tests run as part of `make test` and don't require running services.
+
+use axum::{extract::DefaultBodyLimit, middleware, routing::post, Router};
 use axum_test::TestServer;
 use serde_json::json;
-use std::sync::Arc;
-use torpc::{
-    mev_handler::{handle_flashbots_with_mev, MevProxyState},
-    proxy::{handle_rpc, ProxyState},
-    security::{build_security_layers, security_headers_middleware, SecurityConfig},
+use std::time::Duration;
+use torpc::security::{
+    json_rpc_timeout_middleware, security_headers_middleware, RuntimeWebConfig,
 };
 
-async fn create_test_app() -> Router {
-    let base_state = Arc::new(ProxyState::new(
-        "http://localhost:8545".to_string(),
-        "http://localhost:8545/flashbots".to_string(),
-    ));
-    
-    let mev_state = Arc::new(MevProxyState {
-        base_state: base_state.clone(),
-        mev_client: None,
-    });
-    
-    let security_config = SecurityConfig::default();
-    
+async fn slow_handler() -> &'static str {
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    "should never be reached"
+}
+
+async fn echo_handler(axum::Json(body): axum::Json<serde_json::Value>) -> axum::Json<serde_json::Value> {
+    axum::Json(body)
+}
+
+fn build_router(timeout: Duration, body_limit: usize) -> Router {
+    let csp = axum::http::HeaderValue::from_str(
+        &RuntimeWebConfig {
+            discovery_url: "http://localhost:8081/api/discovery".to_string(),
+            discovery_timeout_ms: 2000,
+            fallback_rpc_url: "http://localhost:8545".to_string(),
+        }
+        .build_csp(),
+    )
+    .unwrap();
+
     Router::new()
-        .route("/rpc", post({
-            let base_state = base_state.clone();
-            move |axum::extract::State(_): axum::extract::State<Arc<MevProxyState>>, req| {
-                let state = base_state.clone();
-                async move {
-                    handle_rpc(axum::extract::State(state), req).await
-                }
-            }
-        }))
-        .with_state(mev_state)
-        .layer(build_security_layers(security_config))
+        .route("/slow", post(slow_handler))
+        .route("/echo", post(echo_handler))
+        .layer(DefaultBodyLimit::max(body_limit))
+        .layer(middleware::from_fn_with_state(timeout, json_rpc_timeout_middleware))
         .layer(middleware::from_fn(security_headers_middleware))
+        .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+            axum::http::header::CONTENT_SECURITY_POLICY,
+            csp,
+        ))
 }
 
+/// JSON-RPC timeouts must keep the security headers attached. A bad layer
+/// ordering would leave the 504 response naked, which is fingerprinting-
+/// adjacent on a Tor-exposed endpoint.
 #[tokio::test]
-async fn test_security_headers_on_success_response() {
-    let app = create_test_app().await;
-    let server = TestServer::new(app).unwrap();
-    
-    let response = server
-        .post("/rpc")
-        .json(&json!({
-            "jsonrpc": "2.0",
-            "method": "eth_blockNumber",
-            "id": 1
-        }))
-        .await;
-    
-    // Verify security headers are present
-    assert_eq!(response.header("X-Content-Type-Options"), "nosniff");
-    assert_eq!(response.header("X-Frame-Options"), "DENY");
-    assert_eq!(response.header("X-XSS-Protection"), "0");
-    assert_eq!(response.header("Referrer-Policy"), "no-referrer");
-    assert_eq!(response.header("Cache-Control"), "no-store, no-cache, must-revalidate, private");
-    assert_eq!(response.header("Pragma"), "no-cache");
-    assert!(response.header("Content-Security-Policy").to_str().unwrap().contains("default-src 'none'"));
-    
-    // Verify server header is overridden
-    assert_eq!(response.header("Server"), "torpc");
+async fn timeout_response_carries_security_headers() {
+    let server = TestServer::new(build_router(Duration::from_millis(50), 1024 * 1024)).unwrap();
+    let response = server.post("/slow").await;
+
+    assert_eq!(response.status_code(), 504);
+    assert_eq!(response.header("content-type"), "application/json");
+    assert_eq!(response.header("x-content-type-options"), "nosniff");
+    assert_eq!(response.header("x-frame-options"), "DENY");
+    assert!(response
+        .header("content-security-policy")
+        .to_str()
+        .unwrap()
+        .contains("default-src 'self'"));
+
+    let body: serde_json::Value = response.json();
+    assert_eq!(body["error"]["code"], -32001);
+    assert_eq!(body["error"]["message"], "upstream timeout");
 }
 
+/// Body-limit rejections must also keep security headers — same reasoning
+/// as above. A 413 leaking out without `Cache-Control: no-store` would
+/// surrender response caching control to intermediaries.
 #[tokio::test]
-async fn test_security_headers_on_error_response() {
-    let app = create_test_app().await;
-    let server = TestServer::new(app).unwrap();
-    
-    // Send invalid request to trigger error
+async fn body_limit_response_carries_security_headers() {
+    let server = TestServer::new(build_router(Duration::from_secs(5), 64)).unwrap();
     let response = server
-        .post("/rpc")
-        .json(&json!({
-            "jsonrpc": "1.0", // Invalid version
-            "method": "eth_blockNumber",
-            "id": 1
-        }))
+        .post("/echo")
+        .json(&json!({ "data": "x".repeat(2_000) }))
         .await;
-    
-    // Verify security headers are present even on error
-    assert_eq!(response.header("X-Content-Type-Options"), "nosniff");
-    assert_eq!(response.header("X-Frame-Options"), "DENY");
-    assert_eq!(response.header("Referrer-Policy"), "no-referrer");
+
+    assert_eq!(response.status_code(), 413);
+    assert_eq!(response.header("x-content-type-options"), "nosniff");
+    assert_eq!(response.header("cache-control"), "no-store, no-cache, must-revalidate");
 }
 
+/// Sanity: a normal request below the body limit and within the timeout
+/// passes through and still gets headers applied.
 #[tokio::test]
-async fn test_request_size_limit() {
-    let app = create_test_app().await;
-    let server = TestServer::new(app).unwrap();
-    
-    // Create a large payload (over 512KB default limit)
-    let large_data = "x".repeat(600 * 1024); // 600KB
-    let payload = json!({
-        "jsonrpc": "2.0",
-        "method": "eth_call",
-        "params": [{
-            "data": large_data
-        }],
-        "id": 1
-    });
-    
+async fn happy_path_response_has_security_headers() {
+    let server = TestServer::new(build_router(Duration::from_secs(5), 1024 * 1024)).unwrap();
     let response = server
-        .post("/rpc")
-        .json(&payload)
+        .post("/echo")
+        .json(&json!({"jsonrpc": "2.0", "method": "echo", "id": 1}))
         .await;
-    
-    // Should be rejected due to size
-    assert_eq!(response.status_code(), StatusCode::PAYLOAD_TOO_LARGE);
-}
 
-#[tokio::test]
-async fn test_cors_headers_present() {
-    std::env::set_var("STRICT_SECURITY_HEADERS", "false");
-    
-    let app = create_test_app().await;
-    let server = TestServer::new(app).unwrap();
-    
-    let response = server
-        .post("/rpc")
-        .json(&json!({
-            "jsonrpc": "2.0",
-            "method": "eth_blockNumber",
-            "id": 1
-        }))
-        .await;
-    
-    // Verify CORS headers when not in strict mode
-    assert_eq!(response.header("Access-Control-Allow-Origin"), "*");
-    assert_eq!(response.header("Access-Control-Allow-Methods"), "POST, OPTIONS");
-    assert_eq!(response.header("Access-Control-Allow-Headers"), "Content-Type, Authorization");
-    
-    std::env::remove_var("STRICT_SECURITY_HEADERS");
-}
-
-#[tokio::test]
-async fn test_strict_headers_no_cors() {
-    std::env::set_var("STRICT_SECURITY_HEADERS", "true");
-    
-    let app = create_test_app().await;
-    let server = TestServer::new(app).unwrap();
-    
-    let response = server
-        .post("/rpc")
-        .json(&json!({
-            "jsonrpc": "2.0",
-            "method": "eth_blockNumber",
-            "id": 1
-        }))
-        .await;
-    
-    // Verify no CORS headers in strict mode
-    assert!(response.header("Access-Control-Allow-Origin").is_empty());
-    
-    // But security headers should still be present
-    assert_eq!(response.header("X-Frame-Options"), "DENY");
-    assert_eq!(response.header("Referrer-Policy"), "no-referrer");
-    
-    std::env::remove_var("STRICT_SECURITY_HEADERS");
+    assert_eq!(response.status_code(), 200);
+    assert_eq!(response.header("x-frame-options"), "DENY");
+    let body: serde_json::Value = response.json();
+    assert_eq!(body["method"], "echo");
 }

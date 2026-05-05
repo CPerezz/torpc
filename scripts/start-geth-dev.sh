@@ -1,23 +1,30 @@
 #!/bin/bash
-# Script to start Geth in development mode
+# Start Geth in development mode for ToRPC integration tests.
+#
+# This script previously enabled the `admin`, `debug`, and `miner` RPC APIs
+# with a wide-open CORS policy (`--http.corsdomain "*"` / `--http.vhosts "*"`).
+# That meant any local process — or any browser-side JS that bypassed the
+# torpc whitelist by hitting Geth directly on 8545 — could change the dev
+# coinbase, run debug tracing, or seize the miner. Tightened scope below.
 
-# Create data directory if it doesn't exist
+set -euo pipefail
+
 mkdir -p data/geth-dev
 
-# Start Geth in dev mode with 12-second block time (simulating mainnet)
-echo "Starting Geth in development mode with 12-second blocks..."
+echo "Starting Geth in development mode (12s block period, restricted RPC)..."
 geth \
     --dev \
     --http \
     --http.addr 127.0.0.1 \
     --http.port 8545 \
-    --http.api eth,net,web3,miner,txpool,debug,admin \
-    --http.corsdomain "*" \
-    --http.vhosts "*" \
+    --http.api eth,net,web3 \
+    --http.corsdomain "http://localhost:8080" \
+    --http.vhosts "localhost,127.0.0.1" \
     --ws \
     --ws.addr 127.0.0.1 \
     --ws.port 8546 \
-    --ws.api eth,net,web3,miner,txpool,debug,admin \
+    --ws.api eth,net,web3 \
+    --ws.origins "http://localhost:8080" \
     --datadir ./data/geth-dev \
     --dev.period 12 \
     --nodiscover \

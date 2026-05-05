@@ -1,0 +1,34 @@
+[Unit]
+Description=Tor hidden service for ToRPC
+After=network.target
+Documentation=https://github.com/example/torpc
+
+[Service]
+# `scripts/install-systemd.sh` substitutes ${USER} and ${TORPC_HOME}.
+Type=simple
+User=${USER}
+WorkingDirectory=${TORPC_HOME}
+ExecStart=/usr/bin/tor -f ${TORPC_HOME}/configs/torrc
+ExecReload=/bin/kill -HUP $MAINPID
+KillSignal=SIGINT
+TimeoutSec=60
+Restart=on-failure
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+
+# Hardening — Tor is the front door of an anonymity service; keep its
+# privileges narrow.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=${TORPC_HOME}/data
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+
+[Install]
+WantedBy=multi-user.target

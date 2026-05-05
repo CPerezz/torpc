@@ -288,10 +288,18 @@
         </footer>
     </div>
 
+    <!--
+        Load order matters:
+        1. /config.js   — sets `window.TorpcConfig` from runtime env (discovery URL etc.)
+        2. proxy-discovery.js — exports `ProxyDiscovery`, reads `window.TorpcConfig`.
+        3. wallet helpers — depend on `ProxyDiscovery`.
+        4. app.js       — wires everything together.
+    -->
+    <script src="/config.js"></script>
+    <script src="proxy-discovery.js"></script>
     <script src="metamask-helper.js"></script>
     <script src="trustwallet-helper.js"></script>
     <script src="coinbase-helper.js"></script>
-    <script src="rainbow-helper.js"></script>
     <script src="rabby-helper.js"></script>
     <script src="app.js"></script>
 </body>

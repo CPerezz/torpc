@@ -290,6 +290,13 @@ impl MevRelayClient {
     /// 
     /// # For Library Developers
     /// Processes pre-formatted bundle submissions from advanced users.
+    /// Non-blocking summary of the relay circuit-breaker state, used by
+    /// `/health` to surface MEV-relay availability without contending on
+    /// the breaker's internal mutex.
+    pub fn circuit_state_summary(&self) -> &'static str {
+        self.circuit_breaker.state_summary()
+    }
+
     pub async fn handle_send_bundle(&self, request: &JsonRpcRequest) -> Result<String, ProxyError> {
         // Extract bundle from params
         let bundle_json = request.params
@@ -299,14 +306,19 @@ impl MevRelayClient {
             .ok_or_else(|| ProxyError::InvalidRequest(
                 "Missing bundle in params".to_string()
             ))?;
-        
+
         let bundle: Bundle = serde_json::from_value(bundle_json.clone())
             .map_err(|e| ProxyError::InvalidRequest(
                 format!("Invalid bundle format: {}", e)
             ))?;
-        
+
         self.send_bundle(bundle).await
     }
+}
+
+/// Construct a shared MEV relay client from configuration.
+pub fn create_mev_client(config: MevConfig) -> Result<Arc<MevRelayClient>, ProxyError> {
+    MevRelayClient::new(config).map(Arc::new)
 }
 
 #[cfg(test)]

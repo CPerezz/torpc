@@ -1,350 +1,234 @@
-use axum::{
-    http::StatusCode,
-    middleware,
-    routing::get,
-    Router,
-};
-use axum_test::TestServer;
-use serde_json::Value;
-use torpc::security::{health_check, security_metrics, security_headers_middleware};
+//! End-to-end tests for the `/health` and `/metrics` endpoints.
+//!
+//! These previously tested a stub implementation that returned hardcoded
+//! `"healthy"` and an empty metrics struct on every call. After Phase 2 the
+//! endpoints query live `ProxyState`: `/health` probes upstream Geth (with a
+//! 1.5s timeout and 5s cache), and `/metrics` reads atomic counters that the
+//! request handlers update in flight. The tests now exercise both code paths
+//! (Geth reachable vs unreachable) and verify the new response shape.
 
-fn create_test_router_with_endpoints() -> Router {
+use axum::{middleware, routing::get, Router};
+use axum_test::TestServer;
+use mockito::Server;
+use serde_json::Value;
+use std::sync::Arc;
+use torpc::mev::mev_handler::MevProxyState;
+use torpc::proxy::ProxyState;
+use torpc::security::{
+    config_js, health_check, security_headers_middleware, security_metrics, RuntimeWebConfig,
+};
+
+/// Build a router with `/health` and `/metrics` wired to a `ProxyState`
+/// pointing at the supplied URL (use a mockito server URL when you want
+/// `/health` to report `geth: "ok"`, or any unreachable address when you
+/// want it to report `"down"`). Mirrors the production wiring in `main.rs`
+/// for the dynamic CSP so tests catch CSP regressions.
+fn router_with_geth(geth_url: String) -> Router {
+    let base_state = Arc::new(
+        ProxyState::new(geth_url, "unused".to_string())
+            .expect("ProxyState::new must succeed in tests"),
+    );
+    let state = Arc::new(MevProxyState {
+        base_state,
+        mev_client: None,
+    });
+
+    let web_config = RuntimeWebConfig {
+        discovery_url: "http://localhost:8081/api/discovery".to_string(),
+        discovery_timeout_ms: 2000,
+        fallback_rpc_url: "http://localhost:8545".to_string(),
+    };
+    let csp = axum::http::HeaderValue::from_str(&web_config.build_csp())
+        .expect("test CSP must be a valid header value");
+
     Router::new()
         .route("/health", get(health_check))
         .route("/metrics", get(security_metrics))
+        .with_state(state)
         .layer(middleware::from_fn(security_headers_middleware))
+        .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+            axum::http::header::CONTENT_SECURITY_POLICY,
+            csp,
+        ))
 }
 
 #[tokio::test]
-async fn test_health_check_endpoint_basic() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    let response = server.get("/health").await;
-    
-    assert_eq!(response.status_code(), StatusCode::OK);
-    assert_eq!(response.header("content-type"), "application/json");
+async fn health_reports_ok_when_geth_responds_successfully() {
+    let mut server = Server::new_async().await;
+    let _m = server
+        .mock("POST", "/")
+        .with_status(200)
+        .with_header("content-type", "application/json")
+        .with_body(r#"{"jsonrpc":"2.0","id":0,"result":"0x1"}"#)
+        .create_async()
+        .await;
+
+    let app = TestServer::new(router_with_geth(server.url())).unwrap();
+    let response = app.get("/health").await;
+    let body: Value = response.json();
+
+    assert_eq!(response.status_code(), 200);
+    assert_eq!(body["status"], "healthy");
+    assert_eq!(body["service"], "torpc");
+    assert_eq!(body["components"]["geth"], "ok");
+    assert_eq!(body["components"]["mev_relay"], "disabled");
+    assert!(body["uptime_seconds"].is_number());
+    assert!(body["timestamp"].as_str().unwrap().contains('T'));
 }
 
 #[tokio::test]
-async fn test_health_check_response_structure() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    let response = server.get("/health").await;
-    let health_data: Value = response.json();
-    
-    // Verify required fields are present
-    assert_eq!(health_data["status"], "healthy");
-    assert_eq!(health_data["service"], "torpc");
-    assert!(health_data["timestamp"].is_string());
-    assert!(health_data["version"].is_string());
-    
-    // Verify components section exists
-    assert!(health_data["components"].is_object());
-    assert_eq!(health_data["components"]["proxy"], "ok");
-    assert_eq!(health_data["components"]["handlers"], "ok");
+async fn health_reports_down_when_geth_is_unreachable() {
+    // Port 1 is privileged + nothing listens; connection will be refused fast.
+    let app = TestServer::new(router_with_geth("http://127.0.0.1:1".to_string())).unwrap();
+    let response = app.get("/health").await;
+    let body: Value = response.json();
+
+    assert_eq!(response.status_code(), 200);
+    assert_eq!(body["status"], "down");
+    assert_eq!(body["components"]["geth"], "down");
 }
 
 #[tokio::test]
-async fn test_health_check_timestamp_format() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    let response = server.get("/health").await;
-    let health_data: Value = response.json();
-    
-    let timestamp = health_data["timestamp"].as_str().unwrap();
-    
-    // Verify timestamp is in RFC3339 format (ISO 8601)
-    assert!(timestamp.contains("T"));
-    assert!(timestamp.contains("Z") || timestamp.contains("+"));
-    
-    // Try to parse the timestamp to ensure it's valid
-    chrono::DateTime::parse_from_rfc3339(timestamp)
-        .expect("Timestamp should be valid RFC3339 format");
+async fn health_response_carries_security_headers() {
+    let mut server = Server::new_async().await;
+    let _m = server
+        .mock("POST", "/")
+        .with_status(200)
+        .with_body(r#"{"jsonrpc":"2.0","id":0,"result":"0x1"}"#)
+        .create_async()
+        .await;
+
+    let app = TestServer::new(router_with_geth(server.url())).unwrap();
+    let response = app.get("/health").await;
+
+    assert_eq!(response.header("x-content-type-options"), "nosniff");
+    assert_eq!(response.header("x-frame-options"), "DENY");
+    assert_eq!(response.header("referrer-policy"), "no-referrer");
+    let csp = response.header("content-security-policy");
+    let csp_str = csp.to_str().unwrap();
+    assert!(csp_str.contains("default-src 'self'"), "CSP was: {}", csp_str);
 }
 
 #[tokio::test]
-async fn test_health_check_version_info() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    let response = server.get("/health").await;
-    let health_data: Value = response.json();
-    
-    let version = health_data["version"].as_str().unwrap();
-    
-    // Version should not be empty and should follow semantic versioning pattern
-    assert!(!version.is_empty());
-    assert!(version == "0.1.0" || version.contains("."));
-}
+async fn health_does_not_leak_sensitive_fields() {
+    let mut server = Server::new_async().await;
+    let _m = server
+        .mock("POST", "/")
+        .with_status(200)
+        .with_body(r#"{"jsonrpc":"2.0","id":0,"result":"0x1"}"#)
+        .create_async()
+        .await;
 
-#[tokio::test]
-async fn test_health_check_no_sensitive_data() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    let response = server.get("/health").await;
-    let health_data: Value = response.json();
-    let response_text = health_data.to_string().to_lowercase();
-    
-    // Ensure no sensitive information is exposed
-    let sensitive_terms = vec![
-        "password", "secret", "key", "token", "auth", "credential",
-        "private", "internal", "database", "config", "env"
-    ];
-    
-    for term in sensitive_terms {
-        assert!(!response_text.contains(term), 
-               "Health check should not contain sensitive term: {}", term);
+    let app = TestServer::new(router_with_geth(server.url())).unwrap();
+    let response = app.get("/health").await;
+    let body = response.text().to_lowercase();
+
+    // None of these should appear in any health payload — Tor users see this.
+    for forbidden in &[
+        "password",
+        "private_key",
+        "signing_key",
+        "credential",
+        "geth_url",
+        "flashbots",
+    ] {
+        assert!(
+            !body.contains(forbidden),
+            "health payload leaked sensitive token `{}`: {}",
+            forbidden,
+            body
+        );
     }
 }
 
 #[tokio::test]
-async fn test_security_metrics_endpoint_basic() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    let response = server.get("/metrics").await;
-    
-    assert_eq!(response.status_code(), StatusCode::OK);
-    assert_eq!(response.header("content-type"), "application/json");
+async fn metrics_response_has_expected_shape() {
+    let app = TestServer::new(router_with_geth("http://127.0.0.1:1".to_string())).unwrap();
+    let response = app.get("/metrics").await;
+    let body: Value = response.json();
+
+    assert_eq!(response.status_code(), 200);
+    let m = &body["security_metrics"];
+    assert!(m["blocked_requests_total"].is_number());
+    assert!(m["rate_limit_hits"].is_number());
+    assert!(m["oversized_requests"].is_number());
+    assert!(m["invalid_methods"].is_number());
+    assert!(m["suspicious_patterns"].is_number());
+    assert!(body["uptime_seconds"].is_number());
+    assert!(body["timestamp"].is_string());
 }
 
 #[tokio::test]
-async fn test_security_metrics_response_structure() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    let response = server.get("/metrics").await;
-    let metrics_data: Value = response.json();
-    
-    // Verify top-level structure
-    assert!(metrics_data["security_metrics"].is_object());
-    assert!(metrics_data["timestamp"].is_string());
-    assert!(metrics_data["uptime"].is_string());
-    
-    // Verify security metrics structure
-    let security_metrics = &metrics_data["security_metrics"];
-    assert!(security_metrics["blocked_requests_total"].is_number());
-    assert!(security_metrics["rate_limit_hits"].is_number());
-    assert!(security_metrics["oversized_requests"].is_number());
-    assert!(security_metrics["invalid_methods"].is_number());
-    assert!(security_metrics["suspicious_patterns"].is_number());
+async fn metrics_initial_counters_are_zero() {
+    let app = TestServer::new(router_with_geth("http://127.0.0.1:1".to_string())).unwrap();
+    let response = app.get("/metrics").await;
+    let body: Value = response.json();
+
+    let m = &body["security_metrics"];
+    assert_eq!(m["blocked_requests_total"], 0);
+    assert_eq!(m["rate_limit_hits"], 0);
+    assert_eq!(m["oversized_requests"], 0);
+    assert_eq!(m["invalid_methods"], 0);
+    assert_eq!(m["suspicious_patterns"], 0);
 }
 
 #[tokio::test]
-async fn test_security_metrics_initial_values() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    let response = server.get("/metrics").await;
-    let metrics_data: Value = response.json();
-    
-    let security_metrics = &metrics_data["security_metrics"];
-    
-    // All counters should start at 0
-    assert_eq!(security_metrics["blocked_requests_total"], 0);
-    assert_eq!(security_metrics["rate_limit_hits"], 0);
-    assert_eq!(security_metrics["oversized_requests"], 0);
-    assert_eq!(security_metrics["invalid_methods"], 0);
-    assert_eq!(security_metrics["suspicious_patterns"], 0);
+async fn endpoints_reject_wrong_methods_with_405() {
+    let app = TestServer::new(router_with_geth("http://127.0.0.1:1".to_string())).unwrap();
+    assert_eq!(app.post("/health").await.status_code(), 405);
+    assert_eq!(app.post("/metrics").await.status_code(), 405);
 }
 
 #[tokio::test]
-async fn test_security_metrics_timestamp_validity() {
-    let app = create_test_router_with_endpoints();
+async fn unknown_path_returns_404_with_security_headers() {
+    let app = TestServer::new(router_with_geth("http://127.0.0.1:1".to_string())).unwrap();
+    let response = app.get("/does-not-exist").await;
+    assert_eq!(response.status_code(), 404);
+    assert_eq!(response.header("x-content-type-options"), "nosniff");
+}
+
+/// End-to-end test for `/config.js`: the daemon advertises the runtime
+/// discovery URL via this endpoint, and the static frontend reads it.
+/// Verifies content type, cache hint, and JS shape so a future change to
+/// `RuntimeWebConfig` doesn't silently break the wallet auto-detect flow.
+#[tokio::test]
+async fn config_js_returns_runtime_window_torpc_config() {
+    let cfg = Arc::new(RuntimeWebConfig {
+        discovery_url: "http://localhost:7777/api/discovery".to_string(),
+        discovery_timeout_ms: 1234,
+        fallback_rpc_url: "http://localhost:5555".to_string(),
+    });
+    let app = Router::new().route("/config.js", get(config_js)).with_state(cfg);
     let server = TestServer::new(app).unwrap();
-    
-    let response = server.get("/metrics").await;
-    let metrics_data: Value = response.json();
-    
-    let timestamp = metrics_data["timestamp"].as_str().unwrap();
-    
-    // Verify timestamp is valid RFC3339 format
-    chrono::DateTime::parse_from_rfc3339(timestamp)
-        .expect("Metrics timestamp should be valid RFC3339 format");
+
+    let response = server.get("/config.js").await;
+    assert_eq!(response.status_code(), 200);
+    assert_eq!(
+        response.header("content-type"),
+        "application/javascript; charset=utf-8"
+    );
+    assert_eq!(response.header("cache-control"), "public, max-age=60");
+
+    let body = response.text();
+    assert!(body.starts_with("window.TorpcConfig = "));
+    assert!(body.contains("\"discoveryUrl\":\"http://localhost:7777/api/discovery\""));
+    assert!(body.contains("\"discoveryTimeoutMs\":1234"));
+    assert!(body.contains("\"fallbackRpcUrl\":\"http://localhost:5555\""));
 }
 
 #[tokio::test]
-async fn test_endpoints_with_security_headers() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    // Test health endpoint has security headers
-    let health_response = server.get("/health").await;
-    verify_security_headers(&health_response);
-    
-    // Test metrics endpoint has security headers
-    let metrics_response = server.get("/metrics").await;
-    verify_security_headers(&metrics_response);
-}
-
-#[tokio::test]
-async fn test_health_check_multiple_requests() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    // Make multiple requests to ensure consistency
-    for i in 0..5 {
-        let response = server.get("/health").await;
-        assert_eq!(response.status_code(), StatusCode::OK);
-        
-        let health_data: Value = response.json();
-        assert_eq!(health_data["status"], "healthy", "Request {} failed", i);
-        assert_eq!(health_data["service"], "torpc", "Request {} failed", i);
-    }
-}
-
-#[tokio::test]
-async fn test_metrics_endpoint_multiple_requests() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    // Make multiple requests to ensure consistency
-    for i in 0..5 {
-        let response = server.get("/metrics").await;
-        assert_eq!(response.status_code(), StatusCode::OK);
-        
-        let metrics_data: Value = response.json();
-        assert!(metrics_data["security_metrics"].is_object(), "Request {} failed", i);
-        assert!(metrics_data["timestamp"].is_string(), "Request {} failed", i);
-    }
-}
-
-#[tokio::test]
-async fn test_nonexistent_endpoint() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    let response = server.get("/nonexistent").await;
-    
-    assert_eq!(response.status_code(), StatusCode::NOT_FOUND);
-    // Should still have security headers even on 404
-    verify_security_headers(&response);
-}
-
-#[tokio::test]
-async fn test_wrong_method_on_endpoints() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    // POST to GET-only endpoints should return 405
-    let health_post = server.post("/health").await;
-    assert_eq!(health_post.status_code(), StatusCode::METHOD_NOT_ALLOWED);
-    verify_security_headers(&health_post);
-    
-    let metrics_post = server.post("/metrics").await;
-    assert_eq!(metrics_post.status_code(), StatusCode::METHOD_NOT_ALLOWED);
-    verify_security_headers(&metrics_post);
-}
-
-#[tokio::test]
-async fn test_health_check_concurrent_access() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    // Test concurrent access doesn't cause issues
-    let mut responses = Vec::new();
-    
-    for _ in 0..3 {
-        let resp = server.get("/health").await;
-        responses.push(resp);
-    }
-    
-    for response in responses {
-        assert_eq!(response.status_code(), StatusCode::OK);
-        let health_data: Value = response.json();
-        assert_eq!(health_data["status"], "healthy");
-    }
-}
-
-#[tokio::test]
-async fn test_metrics_concurrent_access() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    // Test concurrent access doesn't cause issues
-    let mut responses = Vec::new();
-    
-    for _ in 0..3 {
-        let resp = server.get("/metrics").await;
-        responses.push(resp);
-    }
-    
-    for response in responses {
-        assert_eq!(response.status_code(), StatusCode::OK);
-        let metrics_data: Value = response.json();
-        assert!(metrics_data["security_metrics"].is_object());
-    }
-}
-
-#[tokio::test]
-async fn test_endpoints_response_time() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    // Health check should be fast
+async fn health_responds_quickly_even_when_geth_is_down() {
+    // Verifies the `/health` endpoint stays under the 1.5s probe budget plus
+    // a generous overhead margin — load balancers will hammer this.
+    let app = TestServer::new(router_with_geth("http://127.0.0.1:1".to_string())).unwrap();
     let start = std::time::Instant::now();
-    let response = server.get("/health").await;
-    let duration = start.elapsed();
-    
-    assert_eq!(response.status_code(), StatusCode::OK);
-    assert!(duration.as_millis() < 1000, "Health check should be fast, took {}ms", duration.as_millis());
-    
-    // Metrics should also be fast
-    let start = std::time::Instant::now();
-    let response = server.get("/metrics").await;
-    let duration = start.elapsed();
-    
-    assert_eq!(response.status_code(), StatusCode::OK);
-    assert!(duration.as_millis() < 1000, "Metrics should be fast, took {}ms", duration.as_millis());
-}
+    let response = app.get("/health").await;
+    let elapsed = start.elapsed();
 
-#[tokio::test]
-async fn test_endpoint_content_encoding() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    let health_response = server.get("/health").await;
-    let metrics_response = server.get("/metrics").await;
-    
-    // Verify responses are UTF-8 JSON
-    assert_eq!(health_response.header("content-type"), "application/json");
-    assert_eq!(metrics_response.header("content-type"), "application/json");
-    
-    // Verify JSON can be parsed
-    let _: Value = health_response.json();
-    let _: Value = metrics_response.json();
-}
-
-#[tokio::test]
-async fn test_health_check_components_structure() {
-    let app = create_test_router_with_endpoints();
-    let server = TestServer::new(app).unwrap();
-    
-    let response = server.get("/health").await;
-    let health_data: Value = response.json();
-    
-    let components = &health_data["components"];
-    assert!(components.is_object());
-    
-    // All components should report "ok" status
-    if let Some(obj) = components.as_object() {
-        for (name, status) in obj {
-            assert_eq!(status, "ok", "Component {} should be ok", name);
-        }
-    }
-}
-
-// Helper function to verify security headers are present
-fn verify_security_headers(response: &axum_test::TestResponse) {
-    assert_eq!(response.header("X-Content-Type-Options"), "nosniff");
-    assert_eq!(response.header("X-Frame-Options"), "DENY");
-    assert_eq!(response.header("X-XSS-Protection"), "0");
-    assert_eq!(response.header("Referrer-Policy"), "no-referrer");
-    assert!(response.header("Content-Security-Policy")
-        .to_str().unwrap().contains("default-src 'none'"));
-    assert_eq!(response.header("X-Service"), "TorPC");
+    assert_eq!(response.status_code(), 200);
+    assert!(
+        elapsed.as_millis() < 2500,
+        "/health took {}ms with Geth unreachable; budget is 1500ms probe + overhead",
+        elapsed.as_millis()
+    );
 }

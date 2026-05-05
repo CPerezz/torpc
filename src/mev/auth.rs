@@ -130,7 +130,7 @@ impl FlashbotsAuthenticator {
         
         let signature = self.secp.sign_ecdsa_recoverable(&message, &self.signing_key);
         let (recovery_id, signature_bytes) = signature.serialize_compact();
-        
+
         // Format signature as Ethereum does (v = recovery_id + 27)
         let mut eth_signature = [0u8; 65];
         eth_signature[..64].copy_from_slice(&signature_bytes);
@@ -208,12 +208,61 @@ mod tests {
     fn test_deterministic_signatures() {
         let key = "1111111111111111111111111111111111111111111111111111111111111111";
         let auth = FlashbotsAuthenticator::new(key).unwrap();
-        
+
         let body = r#"{"jsonrpc":"2.0","method":"eth_sendBundle","params":[],"id":1}"#;
         let sig1 = auth.sign_request(body).unwrap();
         let sig2 = auth.sign_request(body).unwrap();
-        
+
         // Same input should produce same signature
         assert_eq!(sig1, sig2);
+    }
+
+    /// End-to-end EIP-191 round trip: sign a body, then recover the signer
+    /// address from the signature alone. This is what Flashbots' relay does on
+    /// the wire. A non-recoverable (64-byte) signature would fail this test —
+    /// it caught the Path B implementation that used `sign_ecdsa` instead of
+    /// `sign_ecdsa_recoverable` and silently authenticated as nobody.
+    #[test]
+    fn test_signature_recovers_to_signer_address() {
+        use secp256k1::{
+            ecdsa::{RecoverableSignature, RecoveryId},
+            Message, Secp256k1,
+        };
+
+        let key = "1111111111111111111111111111111111111111111111111111111111111111";
+        let auth = FlashbotsAuthenticator::new(key).unwrap();
+        let body = r#"{"jsonrpc":"2.0","method":"eth_sendBundle","params":[],"id":1}"#;
+
+        let header = auth.sign_request(body).unwrap();
+        let (addr, sig_hex) = header.split_once(':').expect("address:signature header");
+        let sig_bytes = hex::decode(sig_hex.trim_start_matches("0x")).unwrap();
+        assert_eq!(sig_bytes.len(), 65, "Flashbots requires 65-byte EIP-191 signature");
+
+        // Reconstruct the same EIP-191 hash the authenticator signed
+        let prefix = format!("\x19Ethereum Signed Message:\n{}", body.len());
+        let mut prefixed = prefix.into_bytes();
+        prefixed.extend_from_slice(body.as_bytes());
+        let hash = {
+            let mut h = Keccak256::new();
+            h.update(&prefixed);
+            h.finalize()
+        };
+        let message = Message::from_slice(&hash).unwrap();
+
+        // Decode v (last byte, +27 by Ethereum convention) into a RecoveryId
+        let recovery_id = RecoveryId::from_i32(sig_bytes[64] as i32 - 27).unwrap();
+        let recoverable =
+            RecoverableSignature::from_compact(&sig_bytes[..64], recovery_id).unwrap();
+
+        let secp = Secp256k1::new();
+        let public_key = secp.recover_ecdsa(&message, &recoverable).unwrap();
+        let pk_bytes = public_key.serialize_uncompressed();
+        let mut h = Keccak256::new();
+        h.update(&pk_bytes[1..]); // skip 0x04 prefix
+        let pk_hash = h.finalize();
+        let recovered = format!("0x{}", hex::encode(&pk_hash[12..]));
+
+        assert_eq!(recovered, addr, "recovered address must match signer");
+        assert_eq!(recovered, auth.address());
     }
 }

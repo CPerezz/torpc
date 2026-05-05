@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # Service-required tests are gated behind `#[ignore]` and run via
+  # `make test-with-services` only. Keep CI service-free by NOT passing
+  # --include-ignored anywhere in this workflow.
+  RUST_BACKTRACE: 1
+
+jobs:
+  fmt:
+    name: rustfmt
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - name: cargo fmt --check (root)
+        run: cargo fmt --check
+      - name: cargo fmt --check (torpc-proxy workspace)
+        run: cargo fmt --check --manifest-path torpc-proxy/Cargo.toml --all
+
+  clippy:
+    name: clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: clippy (root)
+        run: cargo clippy --all-targets -- -D warnings
+      - name: clippy (torpc-proxy workspace)
+        run: cargo clippy --manifest-path torpc-proxy/Cargo.toml --workspace --all-targets -- -D warnings
+
+  test:
+    name: test (no services)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - name: build
+        run: cargo build --workspace
+      - name: build torpc-proxy workspace
+        run: cargo build --manifest-path torpc-proxy/Cargo.toml --workspace
+      - name: fast tests
+        run: make test
+      - name: torpc-proxy workspace tests
+        run: cargo test --manifest-path torpc-proxy/Cargo.toml --workspace

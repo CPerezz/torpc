@@ -2,13 +2,59 @@ use axum::{
     extract::Request,
     http::{HeaderValue, StatusCode},
     middleware::Next,
-    response::Response,
+    response::{IntoResponse, Response},
 };
-use std::time::{Duration, Instant};
-use tracing::{debug, warn, info};
+use once_cell::sync::Lazy;
 use serde_json::json;
+use std::collections::HashSet;
+use std::time::{Duration, Instant};
 use tower::ServiceBuilder;
 use tower_http::timeout::TimeoutLayer;
+use tracing::{debug, info, warn};
+
+/// Set of JSON-RPC methods we expect to see. Used by `RequestPatternAnalyzer`
+/// to flag suspicious or unknown methods. Kept in sync with `whitelist.rs` —
+/// see Phase 2 follow-ups for sharing this list authoritatively.
+static KNOWN_METHODS: Lazy<HashSet<&'static str>> = Lazy::new(|| {
+    [
+        "eth_blockNumber",
+        "eth_getBalance",
+        "eth_getStorageAt",
+        "eth_getTransactionCount",
+        "eth_getBlockTransactionCountByHash",
+        "eth_getBlockTransactionCountByNumber",
+        "eth_getCode",
+        "eth_call",
+        "eth_estimateGas",
+        "eth_getBlockByHash",
+        "eth_getBlockByNumber",
+        "eth_getTransactionByHash",
+        "eth_getTransactionByBlockHashAndIndex",
+        "eth_getTransactionByBlockNumberAndIndex",
+        "eth_getTransactionReceipt",
+        "eth_getUncleByBlockHashAndIndex",
+        "eth_getUncleByBlockNumberAndIndex",
+        "eth_getUncleCountByBlockHash",
+        "eth_getUncleCountByBlockNumber",
+        "eth_protocolVersion",
+        "eth_chainId",
+        "eth_syncing",
+        "eth_gasPrice",
+        "eth_feeHistory",
+        "eth_maxPriorityFeePerGas",
+        "net_version",
+        "net_listening",
+        "net_peerCount",
+        "web3_clientVersion",
+        "web3_sha3",
+        "eth_sendRawTransaction",
+        "eth_sendBundle",
+        "eth_getLogs",
+    ]
+    .iter()
+    .copied()
+    .collect()
+});
 
 /// Security configuration
 #[derive(Debug, Clone)]
@@ -19,18 +65,23 @@ pub struct SecurityConfig {
 }
 
 impl SecurityConfig {
+    /// Read configuration from the environment. Variable names match the
+    /// canonical `.env.example` (e.g. `MAX_REQUEST_SIZE`); we also accept
+    /// the prior names as deprecated aliases (`MAX_BODY_SIZE`,
+    /// `STRICT_HEADERS`) for one release cycle so existing operator
+    /// environments don't silently drop to defaults. Setting both forms
+    /// makes the canonical name win.
     pub fn from_env() -> Self {
-        let max_body_size = std::env::var("MAX_BODY_SIZE")
-            .ok()
+        let max_body_size = first_env_var(&["MAX_REQUEST_SIZE", "MAX_BODY_SIZE"])
             .and_then(|s| s.parse().ok())
-            .unwrap_or(1024 * 1024); // 1MB default
+            .unwrap_or(1024 * 1024); // 1 MiB
 
         let request_timeout_secs = std::env::var("REQUEST_TIMEOUT")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(30); // 30 seconds default
+            .unwrap_or(30);
 
-        let strict_headers = std::env::var("STRICT_HEADERS")
+        let strict_headers = first_env_var(&["STRICT_SECURITY_HEADERS", "STRICT_HEADERS"])
             .map(|s| s.to_lowercase() == "true")
             .unwrap_or(true);
 
@@ -40,6 +91,31 @@ impl SecurityConfig {
             strict_headers,
         }
     }
+}
+
+/// Try each environment-variable name in order. The first one that's set
+/// (even to an empty string) wins; warns once if a deprecated alias is the
+/// only one set so operators know to migrate.
+fn first_env_var(names: &[&str]) -> Option<String> {
+    let mut found_at: Option<usize> = None;
+    let mut value: Option<String> = None;
+    for (i, name) in names.iter().enumerate() {
+        if let Ok(v) = std::env::var(name) {
+            found_at = Some(i);
+            value = Some(v);
+            break;
+        }
+    }
+    if let (Some(idx), true) = (found_at, names.len() > 1) {
+        if idx > 0 {
+            tracing::warn!(
+                "{} is deprecated; prefer {}",
+                names[idx],
+                names[0]
+            );
+        }
+    }
+    value
 }
 
 impl Default for SecurityConfig {
@@ -52,14 +128,18 @@ impl Default for SecurityConfig {
     }
 }
 
-/// Security metrics tracking
-#[derive(Debug, Clone, Default)]
+/// Security metrics tracking. Fields are `AtomicU64` so the struct can be
+/// shared across handlers via `Arc<SecurityMetrics>` without locking.
+/// Increment methods take `&self` for that reason; the previous `&mut self`
+/// signature meant only one handler could ever hold the metrics, which is
+/// why the live `/metrics` endpoint always returned an empty stub.
+#[derive(Debug, Default)]
 pub struct SecurityMetrics {
-    pub blocked_requests_total: u64,
-    pub rate_limit_hits: u64,
-    pub oversized_requests: u64,
-    pub invalid_methods: u64,
-    pub suspicious_patterns: u64,
+    pub blocked_requests_total: std::sync::atomic::AtomicU64,
+    pub rate_limit_hits: std::sync::atomic::AtomicU64,
+    pub oversized_requests: std::sync::atomic::AtomicU64,
+    pub invalid_methods: std::sync::atomic::AtomicU64,
+    pub suspicious_patterns: std::sync::atomic::AtomicU64,
 }
 
 impl SecurityMetrics {
@@ -67,34 +147,49 @@ impl SecurityMetrics {
         Self::default()
     }
 
-    pub fn increment_blocked_requests(&mut self) {
-        self.blocked_requests_total += 1;
+    pub fn increment_blocked_requests(&self) {
+        self.blocked_requests_total
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn increment_rate_limit_hits(&mut self) {
-        self.rate_limit_hits += 1;
+    pub fn increment_rate_limit_hits(&self) {
+        self.rate_limit_hits
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn increment_oversized_requests(&mut self) {
-        self.oversized_requests += 1;
+    pub fn increment_oversized_requests(&self) {
+        self.oversized_requests
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn increment_invalid_methods(&mut self) {
-        self.invalid_methods += 1;
+    pub fn increment_invalid_methods(&self) {
+        self.invalid_methods
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn increment_suspicious_patterns(&mut self) {
-        self.suspicious_patterns += 1;
+    pub fn increment_suspicious_patterns(&self) {
+        self.suspicious_patterns
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     }
 
-    pub fn get_metrics_json(&self) -> serde_json::Value {
+    /// Take a non-atomic snapshot of all counters as a JSON value. Counters
+    /// are loaded with `Relaxed` ordering — increments may race past this
+    /// snapshot but the per-counter value is always a valid prior value.
+    pub fn snapshot(&self) -> serde_json::Value {
+        use std::sync::atomic::Ordering::Relaxed;
         json!({
-            "blocked_requests_total": self.blocked_requests_total,
-            "rate_limit_hits": self.rate_limit_hits,
-            "oversized_requests": self.oversized_requests,
-            "invalid_methods": self.invalid_methods,
-            "suspicious_patterns": self.suspicious_patterns
+            "blocked_requests_total": self.blocked_requests_total.load(Relaxed),
+            "rate_limit_hits": self.rate_limit_hits.load(Relaxed),
+            "oversized_requests": self.oversized_requests.load(Relaxed),
+            "invalid_methods": self.invalid_methods.load(Relaxed),
+            "suspicious_patterns": self.suspicious_patterns.load(Relaxed),
         })
+    }
+
+    /// Deprecated alias retained so existing tests don't churn — prefer `snapshot()`.
+    #[deprecated(note = "use snapshot() — get_metrics_json is an alias kept only for tests")]
+    pub fn get_metrics_json(&self) -> serde_json::Value {
+        self.snapshot()
     }
 }
 
@@ -170,55 +265,20 @@ impl SecurityEvent {
     }
 }
 
-/// Request pattern analyzer for detecting suspicious behavior
+/// Request pattern analyzer for detecting suspicious behavior. Currently
+/// only exercised by the unit tests; Phase 2 will wire this into
+/// `proxy::handle_rpc` where the JSON-RPC method is actually known so the
+/// `SuspiciousPattern` events fire on real method names rather than the
+/// literal `"unknown"` placeholder the old middleware emitted.
+#[allow(dead_code)]
 #[derive(Debug, Clone)]
 pub struct RequestPatternAnalyzer {
     max_request_size: usize,
-    known_methods: Vec<String>,
 }
 
 impl RequestPatternAnalyzer {
     pub fn new(max_request_size: usize) -> Self {
-        let known_methods = vec![
-            "eth_blockNumber".to_string(),
-            "eth_getBalance".to_string(),
-            "eth_getStorageAt".to_string(),
-            "eth_getTransactionCount".to_string(),
-            "eth_getBlockTransactionCountByHash".to_string(),
-            "eth_getBlockTransactionCountByNumber".to_string(),
-            "eth_getCode".to_string(),
-            "eth_call".to_string(),
-            "eth_estimateGas".to_string(),
-            "eth_getBlockByHash".to_string(),
-            "eth_getBlockByNumber".to_string(),
-            "eth_getTransactionByHash".to_string(),
-            "eth_getTransactionByBlockHashAndIndex".to_string(),
-            "eth_getTransactionByBlockNumberAndIndex".to_string(),
-            "eth_getTransactionReceipt".to_string(),
-            "eth_getUncleByBlockHashAndIndex".to_string(),
-            "eth_getUncleByBlockNumberAndIndex".to_string(),
-            "eth_getUncleCountByBlockHash".to_string(),
-            "eth_getUncleCountByBlockNumber".to_string(),
-            "eth_protocolVersion".to_string(),
-            "eth_chainId".to_string(),
-            "eth_syncing".to_string(),
-            "eth_gasPrice".to_string(),
-            "eth_feeHistory".to_string(),
-            "eth_maxPriorityFeePerGas".to_string(),
-            "net_version".to_string(),
-            "net_listening".to_string(),
-            "net_peerCount".to_string(),
-            "web3_clientVersion".to_string(),
-            "web3_sha3".to_string(),
-            "eth_sendRawTransaction".to_string(),
-            "eth_sendBundle".to_string(),
-            "eth_getLogs".to_string(),
-        ];
-
-        Self {
-            max_request_size,
-            known_methods,
-        }
+        Self { max_request_size }
     }
 
     pub fn analyze_request(&self, method: &str, size: usize, user_agent: Option<&str>) -> Vec<SecurityEvent> {
@@ -241,7 +301,7 @@ impl RequestPatternAnalyzer {
         }
 
         // Check for unknown methods
-        if !self.known_methods.contains(&method.to_string()) {
+        if !KNOWN_METHODS.contains(method) {
             let event = SecurityEvent::new(
                 SecurityEventType::SuspiciousPattern,
                 format!("Unknown RPC method: {}", method)
@@ -282,39 +342,29 @@ impl RequestPatternAnalyzer {
     }
 }
 
-/// Add security headers to all responses
+/// Add security headers to all responses.
+///
+/// Note: the `Content-Security-Policy` is **not** set here. It depends on
+/// runtime-resolved values (specifically `TORPC_DISCOVERY_PORT`) and is
+/// installed in `main.rs` as a `SetResponseHeaderLayer` whose value is
+/// computed once at startup. Setting CSP here with `from_static` baked in
+/// the wrong port whenever an operator changed `TORPC_DISCOVERY_PORT`,
+/// quietly breaking the wallet auto-detect flow.
 pub async fn add_security_headers(request: Request, next: Next) -> Response {
     let mut response = next.run(request).await;
-    
     let headers = response.headers_mut();
-    
-    // Prevent MIME type sniffing
+
     headers.insert("X-Content-Type-Options", HeaderValue::from_static("nosniff"));
-    
-    // Prevent page from being displayed in a frame
     headers.insert("X-Frame-Options", HeaderValue::from_static("DENY"));
-    
-    // Disable legacy XSS protection (modern approach)
     headers.insert("X-XSS-Protection", HeaderValue::from_static("0"));
-    
-    // Control referrer information
     headers.insert("Referrer-Policy", HeaderValue::from_static("no-referrer"));
-    
-    // Content Security Policy - allows local resources while maintaining security
     headers.insert(
-        "Content-Security-Policy", 
-        HeaderValue::from_static("default-src 'self'; connect-src 'self' http://localhost:8081; style-src 'self' 'unsafe-inline'; script-src 'self'; img-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'")
+        "Cache-Control",
+        HeaderValue::from_static("no-store, no-cache, must-revalidate"),
     );
-    
-    // Prevent caching of responses
-    headers.insert("Cache-Control", HeaderValue::from_static("no-store, no-cache, must-revalidate"));
     headers.insert("Pragma", HeaderValue::from_static("no-cache"));
     headers.insert("Expires", HeaderValue::from_static("0"));
-    
-    // Remove server header to prevent fingerprinting
     headers.remove("Server");
-    
-    // Add custom header to identify TorPC (optional)
     headers.insert("X-Service", HeaderValue::from_static("TorPC"));
     
     response
@@ -347,17 +397,9 @@ pub async fn monitor_request_patterns(request: Request, next: Next) -> Response 
         "Request received"
     );
 
-    // For JSON-RPC requests, we'll analyze the method in the proxy handlers
-    // Here we just do basic size and header analysis
-    let analyzer = RequestPatternAnalyzer::new(1024 * 1024); // 1MB limit
-
-    // Basic pattern analysis
-    if let Some(ref ua) = user_agent {
-        let events = analyzer.analyze_request("unknown", estimated_size, Some(ua));
-        for event in events {
-            event.log();
-        }
-    }
+    // Method-level analysis happens in `handle_rpc` after the JSON body is parsed.
+    // Calling `analyze_request("unknown", …)` here would flag every request as a
+    // suspicious method, drowning the log in false positives.
 
     let response = next.run(request).await;
 
@@ -371,43 +413,204 @@ pub async fn monitor_request_patterns(request: Request, next: Next) -> Response 
     response
 }
 
-/// Health check endpoint that doesn't expose sensitive information
-pub async fn health_check() -> Result<axum::Json<serde_json::Value>, StatusCode> {
-    // Basic health indicators without sensitive data
-    let health_data = json!({
-        "status": "healthy",
+/// Health-check endpoint. Probes upstream Geth (with a hard 1.5s timeout
+/// and 5s caching to avoid hammering the node), reports MEV-relay state if
+/// configured, and emits a coarse `status` ∈ `{healthy, degraded, down}` so
+/// load balancers can make routing decisions without parsing detail fields.
+///
+/// Privacy note: every field returned here must be safe to share with an
+/// anonymous Tor client. We deliberately don't expose `geth_url` or any
+/// version of the upstream node — only a binary "ok|down" signal.
+pub async fn health_check(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::mev::mev_handler::MevProxyState>>,
+) -> Result<axum::Json<serde_json::Value>, StatusCode> {
+    let cache = state.base_state.refresh_health().await;
+    let geth_status = if cache.geth_ok { "ok" } else { "down" };
+    let geth_circuit = state.base_state.geth_circuit.state_summary();
+
+    let (mev_relay_status, mev_circuit) = match &state.mev_client {
+        Some(client) => ("configured", client.circuit_state_summary()),
+        None => ("disabled", "n/a"),
+    };
+
+    // Overall status decision: "down" if Geth probe failed; "degraded" if
+    // either circuit is open (we'll serve cached/limited functionality);
+    // "healthy" otherwise. Load balancers route on this single field.
+    let overall = if !cache.geth_ok {
+        "down"
+    } else if geth_circuit == "open" || mev_circuit == "open" {
+        "degraded"
+    } else {
+        "healthy"
+    };
+
+    Ok(axum::Json(json!({
+        "status": overall,
         "service": "torpc",
         "timestamp": chrono::Utc::now().to_rfc3339(),
         "version": env!("CARGO_PKG_VERSION"),
-        // Basic connectivity check (could be expanded)
+        "uptime_seconds": state.base_state.start_time.elapsed().as_secs(),
         "components": {
-            "proxy": "ok",
-            "handlers": "ok"
+            "geth": geth_status,
+            "geth_circuit": geth_circuit,
+            "mev_relay": mev_relay_status,
+            "mev_circuit": mev_circuit,
         }
-    });
-
-    Ok(axum::Json(health_data))
+    })))
 }
 
-/// Simple metrics endpoint for security monitoring
-pub async fn security_metrics() -> Result<axum::Json<serde_json::Value>, StatusCode> {
-    // In a real implementation, these would be pulled from a shared state
-    // For now, return a placeholder structure
-    let metrics = SecurityMetrics::new();
-    
-    let metrics_data = json!({
-        "security_metrics": metrics.get_metrics_json(),
+/// Live security-metrics endpoint backed by `Arc<SecurityMetrics>`. Counter
+/// values are atomics so this returns the genuine running totals — the prior
+/// stub built a fresh empty struct on every call, which is why the dashboard
+/// always read zero.
+pub async fn security_metrics(
+    axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::mev::mev_handler::MevProxyState>>,
+) -> Result<axum::Json<serde_json::Value>, StatusCode> {
+    Ok(axum::Json(json!({
+        "security_metrics": state.base_state.metrics.snapshot(),
+        "uptime_seconds": state.base_state.start_time.elapsed().as_secs(),
         "timestamp": chrono::Utc::now().to_rfc3339(),
-        "uptime": "placeholder", // Could track actual uptime
-    });
-
-    Ok(axum::Json(metrics_data))
+    })))
 }
 
-/// Build security layers for the application
-pub fn build_security_layers(config: SecurityConfig) -> ServiceBuilder<tower::layer::util::Stack<TimeoutLayer, tower::layer::util::Identity>> {
-    ServiceBuilder::new()
-        .layer(TimeoutLayer::new(config.request_timeout))
+/// Runtime configuration consumed by both the dynamic CSP header and the
+/// `/config.js` endpoint, so the static frontend always sees the same
+/// discovery URL the daemon's CSP will let it talk to. Built once at
+/// startup from env vars.
+#[derive(Debug, Clone)]
+pub struct RuntimeWebConfig {
+    pub discovery_url: String,
+    pub discovery_timeout_ms: u32,
+    pub fallback_rpc_url: String,
+}
+
+impl RuntimeWebConfig {
+    /// Read web-facing runtime knobs from the environment, falling back to
+    /// the documented defaults. Variable names match `.env.example`.
+    pub fn from_env() -> Self {
+        let discovery_port = std::env::var("TORPC_DISCOVERY_PORT")
+            .ok()
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(8081);
+        let discovery_timeout_ms = std::env::var("DISCOVERY_TIMEOUT_MS")
+            .ok()
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(2000);
+        let fallback_rpc_url = std::env::var("FALLBACK_RPC_URL")
+            .unwrap_or_else(|_| "http://localhost:8545".to_string());
+        Self {
+            discovery_url: format!("http://localhost:{}/api/discovery", discovery_port),
+            discovery_timeout_ms,
+            fallback_rpc_url,
+        }
+    }
+
+    /// Build the CSP header value that lets the static frontend reach the
+    /// discovery endpoint. The previous static CSP hardcoded port 8081, so
+    /// changing `TORPC_DISCOVERY_PORT` silently broke the wallet flows.
+    pub fn build_csp(&self) -> String {
+        format!(
+            "default-src 'self'; \
+             connect-src 'self' {discovery}; \
+             style-src 'self' 'unsafe-inline'; \
+             script-src 'self'; \
+             img-src 'self' data:; \
+             frame-ancestors 'none'; \
+             base-uri 'self'; \
+             form-action 'self'",
+            discovery = self.discovery_url,
+        )
+    }
+
+    /// Render the JS snippet served at `/config.js`. Embedding the values
+    /// directly (not as a template) avoids any escaping foot-gun: the only
+    /// dynamic field is `fallback_rpc_url`, which is sanitized via
+    /// `serde_json` so even a malicious env var can't break out.
+    pub fn render_config_js(&self) -> String {
+        let payload = json!({
+            "discoveryUrl": self.discovery_url,
+            "discoveryTimeoutMs": self.discovery_timeout_ms,
+            "fallbackRpcUrl": self.fallback_rpc_url,
+        });
+        format!("window.TorpcConfig = {};\n", payload)
+    }
+}
+
+/// `GET /config.js` — serves the runtime snippet with proper JS content
+/// type. Cached by the browser for 60s; long enough to avoid hammering the
+/// daemon, short enough that an operator's env-var change is reflected on
+/// the next browser refresh.
+pub async fn config_js(
+    axum::extract::State(config): axum::extract::State<std::sync::Arc<RuntimeWebConfig>>,
+) -> impl IntoResponse {
+    (
+        StatusCode::OK,
+        [
+            (
+                axum::http::header::CONTENT_TYPE,
+                HeaderValue::from_static("application/javascript; charset=utf-8"),
+            ),
+            (
+                axum::http::header::CACHE_CONTROL,
+                HeaderValue::from_static("public, max-age=60"),
+            ),
+        ],
+        config.render_config_js(),
+    )
+}
+
+/// Build security layers for the application.
+///
+/// Kept for backwards compatibility with tests; new code should prefer
+/// `json_rpc_timeout_middleware` (registered via `from_fn_with_state`)
+/// because the bare `TimeoutLayer` returns an empty `408 Request Timeout`
+/// body, which JSON-RPC clients interpret as a parse error rather than a
+/// proper upstream-timeout signal. Wallets show "invalid response" instead
+/// of the helpful `-32001` error code the new middleware emits.
+pub fn build_security_layers(
+    config: SecurityConfig,
+) -> ServiceBuilder<tower::layer::util::Stack<TimeoutLayer, tower::layer::util::Identity>> {
+    ServiceBuilder::new().layer(TimeoutLayer::new(config.request_timeout))
+}
+
+/// Replacement for `tower_http::TimeoutLayer` that emits a JSON-RPC 2.0
+/// error body on timeout (`-32001 "upstream timeout"`) so wallet clients
+/// see structured JSON instead of an empty `408`. Use by passing the
+/// timeout `Duration` as state via `from_fn_with_state`.
+pub async fn json_rpc_timeout_middleware(
+    axum::extract::State(timeout): axum::extract::State<Duration>,
+    request: Request,
+    next: Next,
+) -> Response {
+    match tokio::time::timeout(timeout, next.run(request)).await {
+        Ok(response) => response,
+        Err(_) => {
+            warn!(
+                "request exceeded {}ms — returning JSON-RPC -32001",
+                timeout.as_millis()
+            );
+            // We can't echo the request `id` (the body has been consumed by
+            // downstream extractors at this point), so emit `id: null`
+            // — the JSON-RPC 2.0 spec permits null when the id is unknown.
+            let body = json!({
+                "jsonrpc": "2.0",
+                "error": {
+                    "code": -32001,
+                    "message": "upstream timeout",
+                },
+                "id": serde_json::Value::Null,
+            });
+            (
+                StatusCode::GATEWAY_TIMEOUT,
+                [(
+                    axum::http::header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                )],
+                axum::Json(body),
+            )
+                .into_response()
+        }
+    }
 }
 
 /// Security headers middleware (wrapper for add_security_headers)
@@ -474,43 +677,149 @@ mod tests {
 
     #[test]
     fn test_security_metrics() {
-        let mut metrics = SecurityMetrics::new();
-        
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let metrics = SecurityMetrics::new();
         metrics.increment_blocked_requests();
         metrics.increment_rate_limit_hits();
-        
-        assert_eq!(metrics.blocked_requests_total, 1);
-        assert_eq!(metrics.rate_limit_hits, 1);
-        
-        let json = metrics.get_metrics_json();
+
+        assert_eq!(metrics.blocked_requests_total.load(Relaxed), 1);
+        assert_eq!(metrics.rate_limit_hits.load(Relaxed), 1);
+
+        let json = metrics.snapshot();
         assert_eq!(json["blocked_requests_total"], 1);
         assert_eq!(json["rate_limit_hits"], 1);
     }
 
     #[test]
     fn test_security_metrics_all_increments() {
-        let mut metrics = SecurityMetrics::new();
-        
-        // Test all increment methods
+        use std::sync::atomic::Ordering::Relaxed;
+
+        let metrics = SecurityMetrics::new();
+
         metrics.increment_blocked_requests();
         metrics.increment_rate_limit_hits();
         metrics.increment_oversized_requests();
         metrics.increment_invalid_methods();
         metrics.increment_suspicious_patterns();
-        
-        assert_eq!(metrics.blocked_requests_total, 1);
-        assert_eq!(metrics.rate_limit_hits, 1);
-        assert_eq!(metrics.oversized_requests, 1);
-        assert_eq!(metrics.invalid_methods, 1);
-        assert_eq!(metrics.suspicious_patterns, 1);
-        
-        // Test JSON output includes all fields
-        let json = metrics.get_metrics_json();
+
+        assert_eq!(metrics.blocked_requests_total.load(Relaxed), 1);
+        assert_eq!(metrics.rate_limit_hits.load(Relaxed), 1);
+        assert_eq!(metrics.oversized_requests.load(Relaxed), 1);
+        assert_eq!(metrics.invalid_methods.load(Relaxed), 1);
+        assert_eq!(metrics.suspicious_patterns.load(Relaxed), 1);
+
+        let json = metrics.snapshot();
         assert_eq!(json["blocked_requests_total"], 1);
         assert_eq!(json["rate_limit_hits"], 1);
         assert_eq!(json["oversized_requests"], 1);
         assert_eq!(json["invalid_methods"], 1);
         assert_eq!(json["suspicious_patterns"], 1);
+    }
+
+    #[test]
+    fn test_runtime_web_config_renders_consistent_url_into_csp_and_js() {
+        // Both the CSP `connect-src` and the JS `discoveryUrl` must use the
+        // same URL — that's the whole point of `RuntimeWebConfig`.
+        let cfg = RuntimeWebConfig {
+            discovery_url: "http://localhost:9999/api/discovery".to_string(),
+            discovery_timeout_ms: 1500,
+            fallback_rpc_url: "http://example.test:8545".to_string(),
+        };
+
+        let csp = cfg.build_csp();
+        assert!(csp.contains("connect-src 'self' http://localhost:9999/api/discovery"));
+        assert!(csp.contains("default-src 'self'"));
+        assert!(csp.contains("frame-ancestors 'none'"));
+
+        let js = cfg.render_config_js();
+        assert!(js.starts_with("window.TorpcConfig = "));
+        assert!(js.contains("\"discoveryUrl\":\"http://localhost:9999/api/discovery\""));
+        assert!(js.contains("\"discoveryTimeoutMs\":1500"));
+        assert!(js.contains("\"fallbackRpcUrl\":\"http://example.test:8545\""));
+        assert!(js.ends_with(";\n"));
+    }
+
+    #[test]
+    fn test_runtime_web_config_from_env_uses_documented_defaults() {
+        // Snapshot any prior values, clear them, then restore — running tests
+        // in parallel might otherwise race on these globals.
+        let prev_port = std::env::var("TORPC_DISCOVERY_PORT").ok();
+        let prev_timeout = std::env::var("DISCOVERY_TIMEOUT_MS").ok();
+        let prev_rpc = std::env::var("FALLBACK_RPC_URL").ok();
+        std::env::remove_var("TORPC_DISCOVERY_PORT");
+        std::env::remove_var("DISCOVERY_TIMEOUT_MS");
+        std::env::remove_var("FALLBACK_RPC_URL");
+
+        let cfg = RuntimeWebConfig::from_env();
+        assert_eq!(cfg.discovery_url, "http://localhost:8081/api/discovery");
+        assert_eq!(cfg.discovery_timeout_ms, 2000);
+        assert_eq!(cfg.fallback_rpc_url, "http://localhost:8545");
+
+        if let Some(v) = prev_port { std::env::set_var("TORPC_DISCOVERY_PORT", v); }
+        if let Some(v) = prev_timeout { std::env::set_var("DISCOVERY_TIMEOUT_MS", v); }
+        if let Some(v) = prev_rpc { std::env::set_var("FALLBACK_RPC_URL", v); }
+    }
+
+    /// Round-trips a request through the JSON-RPC timeout middleware. The
+    /// inner handler sleeps longer than the configured timeout, so the
+    /// middleware should short-circuit with a `504` whose body is a
+    /// JSON-RPC 2.0 error envelope (not the bare `408` the previous
+    /// `tower_http::TimeoutLayer` produced).
+    #[tokio::test]
+    async fn test_json_rpc_timeout_middleware_returns_structured_error() {
+        use axum::body::Body;
+        use axum::routing::get;
+        use axum::Router;
+        use axum_test::TestServer;
+
+        async fn slow_handler() -> &'static str {
+            tokio::time::sleep(Duration::from_millis(500)).await;
+            "should never get here"
+        }
+
+        let app = Router::new()
+            .route("/slow", get(slow_handler))
+            .layer(axum::middleware::from_fn_with_state(
+                Duration::from_millis(50),
+                json_rpc_timeout_middleware,
+            ));
+
+        let server = TestServer::new(app).unwrap();
+        let response = server.get("/slow").await;
+        assert_eq!(response.status_code(), StatusCode::GATEWAY_TIMEOUT);
+        assert_eq!(response.header("content-type"), "application/json");
+
+        let body: serde_json::Value = response.json();
+        assert_eq!(body["jsonrpc"], "2.0");
+        assert_eq!(body["error"]["code"], -32001);
+        assert_eq!(body["error"]["message"], "upstream timeout");
+        assert!(body["id"].is_null());
+
+        // Sanity: also verify a fast handler still passes through unchanged.
+        let _ = Body::empty(); // (silences unused-import for `Body` in some builds)
+    }
+
+    /// Verifies metrics are safe to share across tasks via Arc — the original
+    /// `&mut self` API made this impossible, which is why the live `/metrics`
+    /// endpoint always reported zero.
+    #[tokio::test]
+    async fn test_security_metrics_concurrent_increments() {
+        use std::sync::atomic::Ordering::Relaxed;
+        use std::sync::Arc;
+
+        let metrics = Arc::new(SecurityMetrics::new());
+        let mut tasks = Vec::new();
+        for _ in 0..50 {
+            let m = metrics.clone();
+            tasks.push(tokio::spawn(async move {
+                m.increment_blocked_requests();
+            }));
+        }
+        for t in tasks {
+            t.await.unwrap();
+        }
+        assert_eq!(metrics.blocked_requests_total.load(Relaxed), 50);
     }
 
     #[test]

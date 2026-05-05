@@ -35,6 +35,7 @@ async fn make_rpc_request(url: &str, method: &str, params: Option<Value>) -> Res
 }
 
 // Test 1: End-to-end Tor integration test
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_tor_hidden_service_accessibility() {
     println!("Testing Tor hidden service accessibility...");
@@ -116,6 +117,7 @@ async fn test_tor_hidden_service_accessibility() {
 }
 
 // Test 2: Concurrent request handling
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_concurrent_requests() {
     println!("Testing concurrent request handling...");
@@ -175,6 +177,7 @@ async fn test_concurrent_requests() {
 }
 
 // Test 3: Malformed JSON handling
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_malformed_json_handling() {
     println!("Testing malformed JSON handling...");
@@ -253,6 +256,7 @@ async fn test_malformed_json_handling() {
 }
 
 // Test 7: Rate limiting behavior (runs last to avoid affecting other tests)
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_z_rate_limiting() {
     println!("Testing rate limiting...");
@@ -345,6 +349,7 @@ async fn test_z_rate_limiting() {
 }
 
 // Test 5: Valid request/response flow
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_valid_rpc_methods() {
     println!("Testing valid RPC methods...");
@@ -396,6 +401,7 @@ async fn test_valid_rpc_methods() {
 }
 
 // Test 4: Flashbots endpoint routing
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_flashbots_endpoint() {
     println!("Testing Flashbots endpoint...");
@@ -414,6 +420,7 @@ async fn test_flashbots_endpoint() {
 }
 
 // Test 7: Blocked methods are rejected
+#[ignore = "requires running services; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_blocked_methods() {
     println!("Testing blocked method rejection...");

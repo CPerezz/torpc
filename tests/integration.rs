@@ -5,6 +5,7 @@ use torpc::rate_limit::{RateLimitConfig, RateLimiter};
 use torpc::tor::TorService;
 use std::sync::Arc;
 
+#[ignore = "requires running Geth; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_full_rpc_request_flow() {
     // This test requires a running Geth instance
@@ -14,7 +15,8 @@ async fn test_full_rpc_request_flow() {
     }
     
     let geth_url = "http://127.0.0.1:8545".to_string();
-    let state = ProxyState::new(geth_url, "https://relay.flashbots.net".to_string());
+    let state = ProxyState::new(geth_url, "https://relay.flashbots.net".to_string())
+        .expect("ProxyState::new must succeed in tests");
     
     // Create a simple JSON-RPC request
     let request = torpc::rpc_types::JsonRpcRequest {
@@ -107,6 +109,7 @@ async fn is_service_running(url: &str) -> bool {
     }
 }
 
+#[ignore = "requires running daemon; run via `make test-with-services`"]
 #[tokio::test]
 async fn test_service_endpoints() {
     // Skip if not running

@@ -1,0 +1,37 @@
+[Unit]
+Description=ToRPC daemon (anonymous Ethereum RPC proxy)
+After=network.target
+Wants=torpc-tor.service
+After=torpc-tor.service
+
+[Service]
+# `scripts/install-systemd.sh` substitutes ${USER} and ${TORPC_HOME}.
+Type=simple
+User=${USER}
+WorkingDirectory=${TORPC_HOME}
+EnvironmentFile=-${TORPC_HOME}/.env
+ExecStart=${TORPC_HOME}/target/release/torpc
+KillSignal=SIGTERM
+TimeoutStopSec=15
+Restart=on-failure
+RestartSec=3
+StandardOutput=journal
+StandardError=journal
+
+# Hardening — the daemon parses untrusted input from anonymous Tor clients,
+# so any RCE bug should land the attacker in the tightest possible box.
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ReadWritePaths=${TORPC_HOME}/data ${TORPC_HOME}/torpc.log
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+
+[Install]
+WantedBy=multi-user.target

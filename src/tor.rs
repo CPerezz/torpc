@@ -17,30 +17,92 @@ impl TorService {
         }
     }
     
-    /// Check if Tor is properly configured
+    /// Check if Tor is properly configured.
+    ///
+    /// In addition to verifying the torrc file and data directory, this
+    /// parses the torrc and refuses to start if either
+    /// `HiddenServiceSingleHopMode 1` or `HiddenServiceNonAnonymousMode 1`
+    /// is enabled — those flags effectively disable Tor's anonymity
+    /// guarantees and are silent footguns for an operator who copy-pasted
+    /// the wrong example. Set `TORPC_ALLOW_NON_ANONYMOUS=1` to override
+    /// (intended for benchmarks/CI only).
+    ///
+    /// Permissions on the hidden-service data directory are re-tightened to
+    /// 0700 on every startup, not only on first creation, so a misbehaving
+    /// administrator that did `chmod 755 data/tor/torpc/` can't accidentally
+    /// expose the service key to other users.
     pub fn check_configuration(&self) -> Result<()> {
-        // Check if torrc exists
         if !Path::new(&self.config_path).exists() {
             anyhow::bail!("Tor configuration file not found at: {}", self.config_path);
         }
-        
-        // Check if data directory exists
+
+        // Refuse to start if torrc disables anonymity, unless explicitly
+        // overridden. Comments (`#`) are ignored.
+        let torrc = fs::read_to_string(&self.config_path)
+            .context("Failed to read torrc for anonymity check")?;
+        let allow_override = std::env::var("TORPC_ALLOW_NON_ANONYMOUS").as_deref() == Ok("1");
+        for (idx, raw) in torrc.lines().enumerate() {
+            let line = raw.split('#').next().unwrap_or("").trim();
+            if line.is_empty() {
+                continue;
+            }
+            let mut tokens = line.split_whitespace();
+            let key = tokens.next().unwrap_or("");
+            let val = tokens.next().unwrap_or("");
+            let is_anonymity_disabling = matches!(
+                (key, val),
+                ("HiddenServiceSingleHopMode", "1")
+                    | ("HiddenServiceNonAnonymousMode", "1")
+            );
+            if is_anonymity_disabling {
+                if allow_override {
+                    warn!(
+                        "torrc line {}: '{}' disables Tor anonymity; \
+                         continuing because TORPC_ALLOW_NON_ANONYMOUS=1",
+                        idx + 1,
+                        line
+                    );
+                } else {
+                    anyhow::bail!(
+                        "torrc line {}: '{}' disables Tor anonymity. \
+                         Set TORPC_ALLOW_NON_ANONYMOUS=1 if this is intentional \
+                         (e.g. for benchmarking).",
+                        idx + 1,
+                        line
+                    );
+                }
+            }
+        }
+
+        // Ensure data directory exists with strict permissions.
         let data_dir = Path::new("./data/tor/torpc");
         if !data_dir.exists() {
             warn!("Tor data directory doesn't exist, creating it...");
             fs::create_dir_all(data_dir)
                 .context("Failed to create Tor data directory")?;
-            
-            // Set proper permissions (700)
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::PermissionsExt;
-                let permissions = fs::Permissions::from_mode(0o700);
-                fs::set_permissions(data_dir, permissions)
-                    .context("Failed to set Tor directory permissions")?;
+        }
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let permissions = fs::Permissions::from_mode(0o700);
+            fs::set_permissions(data_dir, permissions)
+                .context("Failed to set Tor directory permissions to 0700")?;
+            // Verify the bits actually stuck — some filesystems silently
+            // ignore mode changes (e.g. SMB mounts).
+            let metadata = fs::metadata(data_dir)
+                .context("Failed to read Tor data directory metadata")?;
+            let mode = metadata.permissions().mode() & 0o777;
+            if mode != 0o700 {
+                anyhow::bail!(
+                    "Tor data directory at {} has mode {:o}, expected 0700; \
+                     refusing to start (the filesystem may not honour permissions)",
+                    data_dir.display(),
+                    mode
+                );
             }
         }
-        
+
         info!("Tor configuration verified");
         Ok(())
     }
