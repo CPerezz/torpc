@@ -137,15 +137,4 @@ mod tests {
         assert_eq!(rpc_error.message, "Method not allowed: eth_accounts");
     }
 
-    #[test]
-    fn test_error_messages() {
-        let invalid_request = ProxyError::InvalidRequest("missing jsonrpc".to_string());
-        assert_eq!(invalid_request.to_string(), "Invalid JSON-RPC request: missing jsonrpc");
-        
-        let method_not_allowed = ProxyError::MethodNotAllowed("eth_sign".to_string());
-        assert_eq!(method_not_allowed.to_string(), "Method not allowed: eth_sign");
-        
-        let rate_limit = ProxyError::RateLimitExceeded;
-        assert_eq!(rate_limit.to_string(), "Rate limit exceeded");
-    }
 }

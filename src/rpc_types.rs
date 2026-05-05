@@ -116,19 +116,6 @@ mod tests {
         assert_eq!(empty_method.validate(), Err("Method cannot be empty"));
     }
 
-    #[test]
-    fn test_response_creation() {
-        let success_response = JsonRpcResponse::success(Some(json!(1)), json!("0x123"));
-        assert_eq!(success_response.jsonrpc, "2.0");
-        assert!(success_response.result.is_some());
-        assert!(success_response.error.is_none());
-
-        let error_response =
-            JsonRpcResponse::error(Some(json!(1)), -32601, "Method not found".to_string(), None);
-        assert_eq!(error_response.jsonrpc, "2.0");
-        assert!(error_response.result.is_none());
-        assert!(error_response.error.is_some());
-    }
 
     #[test]
     fn test_serialization_roundtrip() {

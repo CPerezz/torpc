@@ -53,39 +53,25 @@ fn router_with_geth(geth_url: String) -> Router {
 }
 
 #[tokio::test]
-async fn health_reports_ok_when_geth_responds_successfully() {
-    let mut server = Server::new_async().await;
-    let _m = server
-        .mock("POST", "/")
-        .with_status(200)
-        .with_header("content-type", "application/json")
-        .with_body(r#"{"jsonrpc":"2.0","id":0,"result":"0x1"}"#)
-        .create_async()
-        .await;
-
-    let app = TestServer::new(router_with_geth(server.url())).unwrap();
-    let response = app.get("/health").await;
-    let body: Value = response.json();
-
-    assert_eq!(response.status_code(), 200);
-    assert_eq!(body["status"], "healthy");
-    assert_eq!(body["service"], "torpc");
-    assert_eq!(body["components"]["geth"], "ok");
-    assert_eq!(body["components"]["mev_relay"], "disabled");
-    assert!(body["uptime_seconds"].is_number());
-    assert!(body["timestamp"].as_str().unwrap().contains('T'));
-}
-
-#[tokio::test]
-async fn health_reports_down_when_geth_is_unreachable() {
-    // Port 1 is privileged + nothing listens; connection will be refused fast.
+async fn health_returns_process_uptime_payload() {
+    // /health is now a minimal "process is alive" probe; it does NOT
+    // probe upstream Geth. Component-state observability lives in
+    // /metrics now. Pin the slim shape so a future re-introduction of
+    // probing leaks doesn't sneak past CI.
     let app = TestServer::new(router_with_geth("http://127.0.0.1:1".to_string())).unwrap();
     let response = app.get("/health").await;
     let body: Value = response.json();
 
     assert_eq!(response.status_code(), 200);
-    assert_eq!(body["status"], "down");
-    assert_eq!(body["components"]["geth"], "down");
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["service"], "torpc");
+    assert!(body["uptime_seconds"].is_number());
+    assert!(body["version"].is_string());
+    assert!(body["timestamp"].as_str().unwrap().contains('T'));
+    assert!(
+        body.get("components").is_none(),
+        "components moved to /metrics; /health must stay minimal"
+    );
 }
 
 #[tokio::test]
@@ -217,9 +203,26 @@ async fn config_js_returns_runtime_window_torpc_config() {
 }
 
 #[tokio::test]
-async fn health_responds_quickly_even_when_geth_is_down() {
-    // Verifies the `/health` endpoint stays under the 1.5s probe budget plus
-    // a generous overhead margin — load balancers will hammer this.
+async fn metrics_reports_circuit_breaker_state() {
+    // Phase-Option-C: component-state observability moved from /health to
+    // /metrics. Pin the new shape so the geth/mev circuit summary stays
+    // surfaced for operators.
+    let app = TestServer::new(router_with_geth("http://127.0.0.1:1".to_string())).unwrap();
+    let response = app.get("/metrics").await;
+    assert_eq!(response.status_code(), 200);
+    let body: Value = response.json();
+    let circuits = &body["circuits"];
+    // Both "closed" / "open" / "half_open" / "n/a" are valid states; we
+    // check the field exists and is a string rather than the exact value.
+    assert!(circuits["geth"].is_string());
+    assert!(circuits["mev_relay"].is_string());
+    assert!(circuits["mev_circuit"].is_string());
+}
+
+#[tokio::test]
+async fn health_responds_quickly_under_all_conditions() {
+    // /health is now O(1) — no upstream probe, no cache lookup. Should
+    // always return well under 100ms regardless of upstream Geth state.
     let app = TestServer::new(router_with_geth("http://127.0.0.1:1".to_string())).unwrap();
     let start = std::time::Instant::now();
     let response = app.get("/health").await;
@@ -227,8 +230,8 @@ async fn health_responds_quickly_even_when_geth_is_down() {
 
     assert_eq!(response.status_code(), 200);
     assert!(
-        elapsed.as_millis() < 2500,
-        "/health took {}ms with Geth unreachable; budget is 1500ms probe + overhead",
+        elapsed.as_millis() < 250,
+        "/health took {}ms; should be sub-100ms in O(1) form",
         elapsed.as_millis()
     );
 }

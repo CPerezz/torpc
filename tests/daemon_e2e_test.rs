@@ -111,17 +111,31 @@ async fn flashbots_send_bundle_without_signing_key_returns_minus_32004() {
 }
 
 #[tokio::test]
-async fn health_reports_healthy_when_geth_responds() {
+async fn health_reports_minimal_process_uptime_payload() {
+    // After Phase-Option-C, `/health` is intentionally minimal — process
+    // alive, version, uptime. Component-state observability moved to
+    // `/metrics`. This test pins the new shape so a future re-introduction
+    // of upstream-Geth probing doesn't sneak past CI.
     let mut geth = Server::new_async().await;
-    let m = mock_geth_block_number(&mut geth, "0x1");
+    // Mock is provided so the rest of the daemon initializes happily, but
+    // /health does NOT call Geth — `expect(0)` enforces that.
+    let m = geth
+        .mock("POST", "/")
+        .with_status(200)
+        .with_body(r#"{"jsonrpc":"2.0","result":"0x1","id":1}"#)
+        .expect(0)
+        .create();
 
     let server = make_server(geth.url(), |_| {}).await;
     let response = server.get("/health").await;
     assert_eq!(response.status_code(), 200);
     let body: Value = response.json();
-    assert_eq!(body["status"], "healthy");
-    assert_eq!(body["components"]["geth"], "ok");
-    // /health must actually probe Geth, not return a hardcoded "ok".
+    assert_eq!(body["status"], "ok");
+    assert_eq!(body["service"], "torpc");
+    assert!(body["uptime_seconds"].is_number());
+    assert!(body["version"].is_string());
+    // Component-state has moved out of /health.
+    assert!(body.get("components").is_none());
     m.assert();
 }
 

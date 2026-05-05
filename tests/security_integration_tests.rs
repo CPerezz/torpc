@@ -227,16 +227,14 @@ async fn write_method_rate_limit_returns_jsonrpc_error_after_burst() {
 }
 
 #[tokio::test]
-async fn health_endpoint_reports_geth_state() {
-    let mut geth = Server::new_async().await;
-    let _m = mock_geth_block_number(&mut geth, "0x1");
-
-    let server = TestServer::new(build_router(geth.url(), 1024 * 1024, 100)).unwrap();
-    let body: serde_json::Value = server.get("/health").await.json();
-
-    assert_eq!(body["service"], "torpc");
-    assert_eq!(body["status"], "healthy");
-    assert_eq!(body["components"]["geth"], "ok");
-    assert_eq!(body["components"]["mev_relay"], "disabled");
-    assert!(body["uptime_seconds"].is_number());
+async fn metrics_endpoint_reports_circuit_state() {
+    // After Phase-Option-C the component-state info migrated from /health
+    // to /metrics. Verify operators still get the geth/mev circuit
+    // summary they need for routing decisions.
+    let server = TestServer::new(build_router("http://127.0.0.1:1".to_string(), 1024 * 1024, 100))
+        .unwrap();
+    let body: serde_json::Value = server.get("/metrics").await.json();
+    assert!(body["circuits"]["geth"].is_string());
+    assert_eq!(body["circuits"]["mev_relay"], "disabled");
+    assert_eq!(body["service"].as_str(), None, "service field belongs in /health, not /metrics");
 }

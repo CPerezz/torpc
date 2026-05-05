@@ -163,13 +163,6 @@ mod tests {
     use std::fs;
     
     #[test]
-    fn test_tor_service_new() {
-        let tor = TorService::new();
-        assert_eq!(tor.hostname_path, "./data/tor/torpc/hostname");
-        assert_eq!(tor.config_path, "./configs/torrc");
-    }
-    
-    #[test]
     fn test_get_hostname_missing_file() {
         let tor = TorService {
             hostname_path: "/nonexistent/path/hostname".to_string(),

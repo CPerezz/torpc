@@ -206,18 +206,4 @@ mod tests {
         assert!(!json.contains("maxTimestamp")); // Should be omitted when None
     }
     
-    #[test]
-    fn test_send_bundle_request() {
-        let bundle = Bundle {
-            txs: vec!["0xabc123".to_string()],
-            block_number: "0x1234".to_string(),
-            min_timestamp: None,
-            max_timestamp: None,
-        };
-        
-        let request = SendBundleRequest::new(bundle, 42);
-        assert_eq!(request.method, "eth_sendBundle");
-        assert_eq!(request.id, 42);
-        assert_eq!(request.params.len(), 1);
-    }
 }

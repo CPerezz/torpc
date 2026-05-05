@@ -2,7 +2,6 @@ use axum::{extract::State, Json};
 use reqwest::Client;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tokio::sync::RwLock;
 use tracing::{debug, error, info, warn};
 
 use crate::{
@@ -27,40 +26,17 @@ pub const WRITE_METHODS: &[&str] = &["eth_sendRawTransaction", "eth_sendBundle"]
 pub const WRITE_METHOD_DEFAULT_REQUESTS: u32 = 10;
 pub const WRITE_METHOD_DEFAULT_WINDOW_SECS: u64 = 60;
 
-/// Cached Geth health-probe result. The probe itself takes ~50ms when Geth is
-/// healthy and up to `HEALTH_PROBE_TIMEOUT` when it isn't, which is far too
-/// expensive to run on every `/health` request from a load balancer that
-/// hammers the endpoint multiple times per second. Cache for `HEALTH_TTL`.
-#[derive(Debug, Clone)]
-pub struct HealthCache {
-    pub last_probe_at: Instant,
-    pub geth_ok: bool,
-    pub error: Option<String>,
-}
-
-impl HealthCache {
-    /// Initial state — `last_probe_at` is set far enough in the past that the
-    /// next `/health` will trigger a real probe rather than reporting cached
-    /// startup garbage.
-    fn never_probed() -> Self {
-        Self {
-            last_probe_at: Instant::now() - Duration::from_secs(3600),
-            geth_ok: false,
-            error: Some("not yet probed".to_string()),
-        }
-    }
-}
-
-/// How fresh a `HealthCache` entry must be to skip re-probing Geth.
-pub const HEALTH_TTL: Duration = Duration::from_secs(5);
-
-/// Hard cap on a single Geth probe — much shorter than `geth_client`'s
-/// 30s timeout because we never want `/health` to take longer than this.
-pub const HEALTH_PROBE_TIMEOUT: Duration = Duration::from_millis(1500);
-
 /// Shared state for the JSON-RPC proxy. Cloned per-request via `Arc` (the
 /// `Client` carries its own `Arc` internally so cloning is cheap), so any
 /// fields added here should be cheaply cloneable or themselves `Arc`-wrapped.
+///
+/// Note: the daemon used to also carry a `HealthCache` here — a cached
+/// upstream-Geth probe used by `/health`. That was deleted alongside the
+/// component-state JSON in `/health` itself: the topology this daemon runs
+/// in (Tor hidden service, no LB) doesn't have a consumer that benefits
+/// from per-component health distinctions. Operators wanting Geth liveness
+/// either curl Geth directly or read the `geth_circuit` field exposed by
+/// `/metrics`.
 #[derive(Clone)]
 pub struct ProxyState {
     pub geth_client: Client,
@@ -70,8 +46,6 @@ pub struct ProxyState {
     pub metrics: Arc<SecurityMetrics>,
     /// Wall-clock anchor for `/health` uptime reporting.
     pub start_time: Instant,
-    /// Result of the most recent Geth probe, refreshed lazily on `/health`.
-    pub health_cache: Arc<RwLock<HealthCache>>,
     /// Circuit breaker around upstream Geth. Without this, when Geth is down
     /// every request waits the full 30s reqwest timeout, blocking handler
     /// threads and creating a thundering-herd retry storm. The breaker
@@ -106,7 +80,6 @@ impl ProxyState {
             flashbots_url,
             metrics: Arc::new(SecurityMetrics::new()),
             start_time: Instant::now(),
-            health_cache: Arc::new(RwLock::new(HealthCache::never_probed())),
             geth_circuit: Arc::new(CircuitBreaker::new()),
             write_method_limiter,
         })
@@ -145,59 +118,6 @@ impl ProxyState {
         );
         self.metrics.increment_rate_limit_hits();
         Err(ProxyError::RateLimitExceeded)
-    }
-
-    /// Probe Geth's `eth_blockNumber` once with a hard timeout. On success
-    /// returns `Ok(())`; on any failure returns a short error string suitable
-    /// for the cached `error` field.
-    async fn probe_geth(&self) -> Result<(), String> {
-        let probe = self
-            .geth_client
-            .post(&self.geth_url)
-            .json(&serde_json::json!({
-                "jsonrpc": "2.0",
-                "method": "eth_blockNumber",
-                "params": [],
-                "id": 0
-            }))
-            .send();
-
-        match tokio::time::timeout(HEALTH_PROBE_TIMEOUT, probe).await {
-            Err(_) => Err(format!("probe exceeded {}ms", HEALTH_PROBE_TIMEOUT.as_millis())),
-            Ok(Err(e)) => Err(format!("network: {}", e)),
-            Ok(Ok(resp)) if !resp.status().is_success() => {
-                Err(format!("status {}", resp.status()))
-            }
-            Ok(Ok(_)) => Ok(()),
-        }
-    }
-
-    /// Returns the current Geth probe result, refreshing the cache if stale.
-    /// Holds the read lock for the fast path (cache hit) and only acquires
-    /// the write lock when an actual probe is needed.
-    pub async fn refresh_health(&self) -> HealthCache {
-        {
-            let cached = self.health_cache.read().await;
-            if cached.last_probe_at.elapsed() < HEALTH_TTL {
-                return cached.clone();
-            }
-        }
-
-        let probe_result = self.probe_geth().await;
-
-        let mut cache = self.health_cache.write().await;
-        // Re-check freshness under the write lock — another task may have
-        // probed concurrently while we were awaiting.
-        if cache.last_probe_at.elapsed() < HEALTH_TTL {
-            return cache.clone();
-        }
-
-        *cache = HealthCache {
-            last_probe_at: Instant::now(),
-            geth_ok: probe_result.is_ok(),
-            error: probe_result.err(),
-        };
-        cache.clone()
     }
 }
 

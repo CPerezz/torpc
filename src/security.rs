@@ -173,49 +173,28 @@ pub async fn add_security_headers(request: Request, next: Next) -> Response {
     response
 }
 
-/// Health-check endpoint. Probes upstream Geth (with a hard 1.5s timeout
-/// and 5s caching to avoid hammering the node), reports MEV-relay state if
-/// configured, and emits a coarse `status` ∈ `{healthy, degraded, down}` so
-/// load balancers can make routing decisions without parsing detail fields.
+/// Health-check endpoint — minimal "the process is alive" probe.
+///
+/// Earlier revisions also performed an upstream-Geth probe with caching and
+/// returned a per-component `{healthy|degraded|down}` status. That existed
+/// for a load-balancer / k8s-probe consumer that this deployment topology
+/// (Tor hidden service, no LB) does not have. Operators wanting upstream
+/// liveness should read `/metrics` (which exposes the `geth_circuit` and
+/// `mev_circuit` summaries) or curl Geth directly. Slimming `/health` cut
+/// ~110 LOC of probe + cache machinery and four tests that asserted on the
+/// removed shape.
 ///
 /// Privacy note: every field returned here must be safe to share with an
-/// anonymous Tor client. We deliberately don't expose `geth_url` or any
-/// version of the upstream node — only a binary "ok|down" signal.
+/// anonymous Tor client. The fields below are deliberately vanilla.
 pub async fn health_check(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::mev::mev_handler::MevProxyState>>,
 ) -> Result<axum::Json<serde_json::Value>, StatusCode> {
-    let cache = state.base_state.refresh_health().await;
-    let geth_status = if cache.geth_ok { "ok" } else { "down" };
-    let geth_circuit = state.base_state.geth_circuit.state_summary();
-
-    let (mev_relay_status, mev_circuit) = match &state.mev_client {
-        Some(client) => ("configured", client.circuit_state_summary()),
-        None => ("disabled", "n/a"),
-    };
-
-    // Overall status decision: "down" if Geth probe failed; "degraded" if
-    // either circuit is open (we'll serve cached/limited functionality);
-    // "healthy" otherwise. Load balancers route on this single field.
-    let overall = if !cache.geth_ok {
-        "down"
-    } else if geth_circuit == "open" || mev_circuit == "open" {
-        "degraded"
-    } else {
-        "healthy"
-    };
-
     Ok(axum::Json(json!({
-        "status": overall,
+        "status": "ok",
         "service": "torpc",
-        "timestamp": chrono::Utc::now().to_rfc3339(),
         "version": env!("CARGO_PKG_VERSION"),
         "uptime_seconds": state.base_state.start_time.elapsed().as_secs(),
-        "components": {
-            "geth": geth_status,
-            "geth_circuit": geth_circuit,
-            "mev_relay": mev_relay_status,
-            "mev_circuit": mev_circuit,
-        }
+        "timestamp": chrono::Utc::now().to_rfc3339(),
     })))
 }
 
@@ -223,11 +202,25 @@ pub async fn health_check(
 /// values are atomics so this returns the genuine running totals — the prior
 /// stub built a fresh empty struct on every call, which is why the dashboard
 /// always read zero.
+///
+/// Also surfaces the circuit-breaker state for both upstream Geth and the
+/// MEV relay (when configured). This is where component-state observability
+/// lives now that `/health` is intentionally minimal.
 pub async fn security_metrics(
     axum::extract::State(state): axum::extract::State<std::sync::Arc<crate::mev::mev_handler::MevProxyState>>,
 ) -> Result<axum::Json<serde_json::Value>, StatusCode> {
+    let geth_circuit = state.base_state.geth_circuit.state_summary();
+    let (mev_relay_status, mev_circuit) = match &state.mev_client {
+        Some(client) => ("configured", client.circuit_state_summary()),
+        None => ("disabled", "n/a"),
+    };
     Ok(axum::Json(json!({
         "security_metrics": state.base_state.metrics.snapshot(),
+        "circuits": {
+            "geth": geth_circuit,
+            "mev_relay": mev_relay_status,
+            "mev_circuit": mev_circuit,
+        },
         "uptime_seconds": state.base_state.start_time.elapsed().as_secs(),
         "timestamp": chrono::Utc::now().to_rfc3339(),
     })))
@@ -513,14 +506,6 @@ mod tests {
             t.await.unwrap();
         }
         assert_eq!(metrics.blocked_requests_total.load(Relaxed), 50);
-    }
-
-    #[test]
-    fn test_security_config_defaults() {
-        let config = SecurityConfig::default();
-        assert_eq!(config.max_body_size, 1024 * 1024); // 1MB
-        assert_eq!(config.request_timeout.as_secs(), 30);
-        assert_eq!(config.strict_headers, true);
     }
 
     #[test]

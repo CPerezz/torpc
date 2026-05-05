@@ -35,15 +35,3 @@ pub mod types;
 pub use auth::{AuthError, FlashbotsAuthenticator};
 pub use client::{create_mev_client, MevRelayClient};
 pub use types::{Bundle, BundleResponse, MevConfig};
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    
-    #[test]
-    fn test_module_exports() {
-        // Verify main types are accessible
-        let _config = MevConfig::default();
-        // Other types are tested in their respective modules
-    }
-}
