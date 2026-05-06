@@ -47,9 +47,14 @@ jobs:
           key: cli-${{ matrix.target }}
 
       - name: build daemon + CLI client
+        # `--bin torpc-proxy` doesn't resolve from the workspace root because
+        # the binary is defined in the `torpc-proxy-cli` package — Cargo's
+        # `--bin` flag searches default-run packages first and bails before
+        # finding it. Use `-p torpc-proxy-cli` to scope; `torpc` is the root
+        # package's default and works with `--bin torpc`.
         run: |
           cargo build --release --target ${{ matrix.target }} --bin torpc
-          cargo build --release --target ${{ matrix.target }} --bin torpc-proxy
+          cargo build --release --target ${{ matrix.target }} -p torpc-proxy-cli
 
       # Pack the two CLI binaries into the platform-conventional archive.
       # `strip = true` in `[profile.release]` already shrinks them; we just
