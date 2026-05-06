@@ -4,9 +4,9 @@
 )]
 
 use anyhow::Result;
-use std::sync::Arc;
-use std::path::PathBuf;
 use std::fs;
+use std::path::PathBuf;
+use std::sync::Arc;
 use tauri::{
     CustomMenuItem, Manager, SystemTray, SystemTrayEvent, SystemTrayMenu, SystemTrayMenuItem,
 };
@@ -23,12 +23,12 @@ fn get_config_dir() -> Result<PathBuf> {
     let config_dir = dirs::config_dir()
         .ok_or_else(|| anyhow::anyhow!("Could not determine config directory"))?
         .join("torpc-proxy");
-    
+
     // Create directory if it doesn't exist
     if !config_dir.exists() {
         fs::create_dir_all(&config_dir)?;
     }
-    
+
     Ok(config_dir)
 }
 
@@ -40,7 +40,7 @@ fn get_config_file_path() -> Result<PathBuf> {
 /// Load configuration from file
 fn load_config() -> Result<ProxyConfig> {
     let config_path = get_config_file_path()?;
-    
+
     if config_path.exists() {
         info!("Loading configuration from {:?}", config_path);
         let config_str = fs::read_to_string(&config_path)?;
@@ -118,38 +118,41 @@ async fn update_config(
     config: ProxyConfig,
 ) -> Result<(), String> {
     let controller = state.proxy_controller.lock().await;
-    
+
     // Update the configuration in the controller
     controller
         .update_config(config.clone())
         .await
         .map_err(|e| e.to_string())?;
-    
+
     // Save the configuration to file
     if let Err(e) = save_config(&config) {
         error!("Failed to save configuration to file: {}", e);
         // Don't fail the command if we can't save the file, just log the error
     }
-    
+
     Ok(())
 }
 
 #[tauri::command]
 async fn test_connection(onion_endpoint: String, tor_proxy: String) -> Result<String, String> {
-    use tokio_socks::tcp::Socks5Stream;
     use std::time::Duration;
-    
-    info!("test_connection called with endpoint: {} via proxy: {}", onion_endpoint, tor_proxy);
-    
+    use tokio_socks::tcp::Socks5Stream;
+
+    info!(
+        "test_connection called with endpoint: {} via proxy: {}",
+        onion_endpoint, tor_proxy
+    );
+
     // Parse tor proxy address
     let tor_proxy_addr: std::net::SocketAddr = tor_proxy
         .parse()
-        .map_err(|e| format!("Invalid Tor proxy address: {}", e))?;
-    
+        .map_err(|e| format!("Invalid Tor proxy address: {e}"))?;
+
     // Try to connect through Tor
     let connect_future = Socks5Stream::connect(tor_proxy_addr, onion_endpoint.as_str());
     let timeout_future = tokio::time::timeout(Duration::from_secs(30), connect_future);
-    
+
     match timeout_future.await {
         Ok(Ok(_stream)) => {
             info!("Connection test successful");
@@ -160,12 +163,15 @@ async fn test_connection(onion_endpoint: String, tor_proxy: String) -> Result<St
             if e.to_string().contains("Connection refused") {
                 Err("Connection refused: The onion service may not be running or the address is incorrect.".to_string())
             } else {
-                Err(format!("Connection failed: {}", e))
+                Err(format!("Connection failed: {e}"))
             }
         }
         Err(_) => {
             error!("Connection test timeout");
-            Err("Connection timeout: Unable to reach the onion endpoint within 30 seconds.".to_string())
+            Err(
+                "Connection timeout: Unable to reach the onion endpoint within 30 seconds."
+                    .to_string(),
+            )
         }
     }
 }
@@ -238,63 +244,62 @@ fn main() {
             test_connection
         ])
         .system_tray(create_system_tray())
-        .on_window_event(|event| match event.event() {
-            tauri::WindowEvent::CloseRequested { api, .. } => {
+        .on_window_event(|event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event.event() {
                 // Prevent the window from closing
                 api.prevent_close();
-                
+
                 // Hide the window instead
                 let window = event.window();
                 let _ = window.hide();
-                
+
                 info!("Window hidden to system tray");
             }
-            _ => {}
         })
         .on_system_tray_event(move |app, event| {
             #[allow(clippy::single_match)]
             match event {
                 SystemTrayEvent::MenuItemClick { id, .. } => match id.as_str() {
-                "start" => {
-                    let handle = app.app_handle();
-                    tauri::async_runtime::spawn(async move {
-                        let state: tauri::State<AppState> = handle.state();
-                        let controller = state.proxy_controller.lock().await;
-                        if let Err(e) = controller.start().await {
-                            error!("Failed to start proxy: {}", e);
-                        }
-                    });
-                }
-                "stop" => {
-                    let handle = app.app_handle();
-                    tauri::async_runtime::spawn(async move {
-                        let state: tauri::State<AppState> = handle.state();
-                        let controller = state.proxy_controller.lock().await;
-                        if let Err(e) = controller.stop().await {
-                            error!("Failed to stop proxy: {}", e);
-                        }
-                    });
-                }
-                "settings" => {
-                    if let Some(window) = app.get_window("main") {
-                        // Show the window
-                        let _ = window.show();
-                        let _ = window.set_focus();
-                        let _ = window.unminimize();
+                    "start" => {
+                        let handle = app.app_handle();
+                        tauri::async_runtime::spawn(async move {
+                            let state: tauri::State<AppState> = handle.state();
+                            let controller = state.proxy_controller.lock().await;
+                            if let Err(e) = controller.start().await {
+                                error!("Failed to start proxy: {}", e);
+                            }
+                        });
                     }
-                }
-                "quit" => {
-                    let handle = app.app_handle();
-                    tauri::async_runtime::spawn(async move {
-                        let state: tauri::State<AppState> = handle.state();
-                        let controller = state.proxy_controller.lock().await;
-                        let _ = controller.stop().await;
-                        std::process::exit(0);
-                    });
-                }
+                    "stop" => {
+                        let handle = app.app_handle();
+                        tauri::async_runtime::spawn(async move {
+                            let state: tauri::State<AppState> = handle.state();
+                            let controller = state.proxy_controller.lock().await;
+                            if let Err(e) = controller.stop().await {
+                                error!("Failed to stop proxy: {}", e);
+                            }
+                        });
+                    }
+                    "settings" => {
+                        if let Some(window) = app.get_window("main") {
+                            // Show the window
+                            let _ = window.show();
+                            let _ = window.set_focus();
+                            let _ = window.unminimize();
+                        }
+                    }
+                    "quit" => {
+                        let handle = app.app_handle();
+                        tauri::async_runtime::spawn(async move {
+                            let state: tauri::State<AppState> = handle.state();
+                            let controller = state.proxy_controller.lock().await;
+                            let _ = controller.stop().await;
+                            std::process::exit(0);
+                        });
+                    }
+                    _ => {}
+                },
                 _ => {}
-            },
-            _ => {}
             }
         })
         .run(tauri::generate_context!())

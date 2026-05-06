@@ -14,9 +14,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use torpc::mev::mev_handler::MevProxyState;
 use torpc::proxy::ProxyState;
-use torpc::security::{
-    health_check, security_headers_middleware, security_metrics, STATIC_CSP,
-};
+use torpc::security::{health_check, security_headers_middleware, security_metrics, STATIC_CSP};
 
 /// Build a router with `/health` and `/metrics` wired to a `ProxyState`
 /// pointing at the supplied URL (use a mockito server URL when you want
@@ -86,7 +84,7 @@ async fn health_response_carries_security_headers() {
     assert_eq!(response.header("referrer-policy"), "no-referrer");
     let csp = response.header("content-security-policy");
     let csp_str = csp.to_str().unwrap();
-    assert!(csp_str.contains("default-src 'self'"), "CSP was: {}", csp_str);
+    assert!(csp_str.contains("default-src 'self'"), "CSP was: {csp_str}");
 }
 
 #[tokio::test]
@@ -114,9 +112,7 @@ async fn health_does_not_leak_sensitive_fields() {
     ] {
         assert!(
             !body.contains(forbidden),
-            "health payload leaked sensitive token `{}`: {}",
-            forbidden,
-            body
+            "health payload leaked sensitive token `{forbidden}`: {body}"
         );
     }
 }

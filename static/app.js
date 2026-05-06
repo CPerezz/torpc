@@ -22,12 +22,19 @@
     const torInfo = document.getElementById("tor-info");
 
     window.addEventListener("DOMContentLoaded", () => {
+        // Each setup function early-returns when its DOM isn't present, so a
+        // single app.js drives both `index_operator.html` (test panel +
+        // self-test wallet sections) and `index_user.html` (wallet picker
+        // gated by a localhost client probe).
         checkStatus();
         setupMethodSelector();
+        setupClientProbe();
+        setupWalletPicker();
         WALLETS.forEach(wireWallet);
     });
 
     async function checkStatus() {
+        if (!statusElement) return; // operator template only
         try {
             const response = await fetch("/rpc", {
                 method: "POST",
@@ -52,6 +59,104 @@
                 "2. Check: data/tor/torpc/hostname for your .onion address\n" +
                 "3. Connect via: torsocks curl http://your-address.onion/rpc";
         }
+    }
+
+    // ---------------------------------------------------------------------
+    // User template: probe the local TorPC client and gate Step 2.
+    //
+    // The user template (`index_user.html`) is served when the visitor
+    // reaches the daemon via .onion. They don't have a co-located proxy at
+    // localhost:8545 unless they've installed the client. Probing it tells
+    // them whether they're ready for Step 2 without waiting for a wallet
+    // request to silently fail.
+    //
+    // Tor Browser at the Safest security level disables JS — for those
+    // users the `<noscript>` block in the template shows manual setup
+    // instructions instead of this probe.
+    // ---------------------------------------------------------------------
+    async function setupClientProbe() {
+        const statusEl = document.getElementById("client-status");
+        const step2 = document.getElementById("step-2");
+        if (!statusEl || !step2) return; // operator template
+
+        const reachable = await probeLocalClient();
+        if (reachable) {
+            statusEl.classList.remove("callout-pending");
+            statusEl.classList.add("callout-success");
+            statusEl.innerHTML =
+                "<span aria-hidden=\"true\">✓</span> Local client detected. " +
+                "Continue to Step 2 below.";
+            step2.hidden = false;
+        } else {
+            statusEl.classList.remove("callout-pending");
+            statusEl.classList.add("callout-warn");
+            statusEl.innerHTML =
+                "<span aria-hidden=\"true\">⚠</span> No client at " +
+                "<code>127.0.0.1:8545</code>. Install above, run it, then " +
+                "<a href=\"\" onclick=\"location.reload(); return false;\">retry</a>.";
+        }
+    }
+
+    /**
+     * Returns true iff a TorPC client is responding on localhost:8545. Sends
+     * a dummy `net_version` JSON-RPC request and accepts any 2xx with a
+     * JSON-shaped body — we don't care what the upstream chain is, only
+     * that *something* is bridging to a real RPC.
+     *
+     * Times out at 1.5s so the page renders fast even when localhost rejects
+     * the connection on first try (some firewalls are slow to RST).
+     */
+    async function probeLocalClient() {
+        const controller = new AbortController();
+        const timeout = setTimeout(() => controller.abort(), 1500);
+        try {
+            const resp = await fetch("http://127.0.0.1:8545", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({
+                    jsonrpc: "2.0",
+                    method: "net_version",
+                    params: [],
+                    id: 1,
+                }),
+                signal: controller.signal,
+                // No credentials, no cache; pure probe.
+                credentials: "omit",
+                cache: "no-store",
+            });
+            clearTimeout(timeout);
+            if (!resp.ok) return false;
+            const data = await resp.json();
+            return data && (data.result !== undefined || data.error !== undefined);
+        } catch (_) {
+            clearTimeout(timeout);
+            return false;
+        }
+    }
+
+    // ---------------------------------------------------------------------
+    // User template: wallet picker.
+    //
+    // Step 2 of the user template hides all wallet flows by default and
+    // reveals one when a `.wallet-card` is clicked. The flows themselves
+    // use the same DOM IDs as the operator template's self-test sections,
+    // so `WALLETS.forEach(wireWallet)` wires both up identically.
+    // ---------------------------------------------------------------------
+    function setupWalletPicker() {
+        const cards = document.querySelectorAll(".wallet-card");
+        if (cards.length === 0) return; // operator template
+
+        cards.forEach((card) => {
+            card.addEventListener("click", () => {
+                const id = card.dataset.wallet;
+                cards.forEach((c) =>
+                    c.classList.toggle("active", c === card)
+                );
+                document.querySelectorAll(".wallet-flow").forEach((flow) => {
+                    flow.hidden = flow.dataset.wallet !== id;
+                });
+            });
+        });
     }
 
     function setupMethodSelector() {
@@ -222,18 +327,9 @@
                 );
             },
         },
-        {
-            id: "rainbow",
-            els: {
-                addBtn: "add-to-rainbow",
-                statusContainer: "rainbow-status",
-                statusText: "rainbow-status-text",
-                rpcInfo: "rainbow-rpc-info",
-                rpcInput: "rainbow-rpc-url",
-                copyBtn: "rainbow-copy-btn",
-                instructions: "rainbow-instructions",
-            },
-        },
+        // Rainbow had a section in the previous index.html but no helper
+        // file, no installed-detection, and no addNetwork flow — clicking
+        // the button just showed the same RPC URL as MetaMask. Removed.
         {
             id: "rabby",
             els: {

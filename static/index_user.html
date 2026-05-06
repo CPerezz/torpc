@@ -1,0 +1,228 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>TorPC — Anonymous Ethereum RPC</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="container">
+        <header>
+            <h1><span aria-hidden="true">🧅</span> TorPC</h1>
+            <p>Connect your wallet to Ethereum, privately, through Tor.</p>
+        </header>
+
+        <noscript>
+            <section class="callout callout-warn">
+                <h2>JavaScript is disabled</h2>
+                <p>The interactive setup needs JavaScript to detect whether
+                   your local TorPC client is running. Manual instructions
+                   are below — install the
+                   <a href="https://github.com/CPerezz/torpc/releases/latest">client</a>,
+                   run it on <code>127.0.0.1:8545</code>, and add a custom
+                   network to your wallet pointing at that URL with
+                   chain&nbsp;ID <code>1</code>.</p>
+            </section>
+        </noscript>
+
+        <section class="step-section">
+            <h2><span class="step-num">1</span> Install the local TorPC client</h2>
+            <p>The client runs on your machine, listens on
+               <code>http://127.0.0.1:8545</code>, and tunnels your wallet's
+               JSON-RPC requests through Tor to this hidden service. It also
+               strips wallet-fingerprinting headers (User-Agent, Origin,
+               Sec-CH-UA-*) before they leave your machine.</p>
+
+            <div class="install-options">
+                <a class="btn btn-primary" target="_blank" rel="noopener"
+                   href="https://github.com/CPerezz/torpc/releases/latest">
+                    Download binary
+                </a>
+                <a class="btn btn-small" target="_blank" rel="noopener"
+                   href="https://github.com/CPerezz/torpc#wallet-user-setup">
+                    Build from source
+                </a>
+            </div>
+
+            <p class="muted">After installing, run:</p>
+            <pre class="code-block">torpc-proxy start --config torpc-proxy.toml</pre>
+
+            <div id="client-status" class="callout callout-pending">
+                <span class="spinner" aria-hidden="true"></span>
+                <span>Detecting local client at <code>127.0.0.1:8545</code>…</span>
+            </div>
+        </section>
+
+        <section class="step-section" id="step-2" hidden>
+            <h2><span class="step-num">2</span> Add the network to your wallet</h2>
+            <p>Pick your wallet:</p>
+
+            <div class="wallet-picker">
+                <button class="wallet-card" data-wallet="metamask" type="button">
+                    <span class="wallet-emoji" aria-hidden="true">🦊</span>
+                    <span>MetaMask</span>
+                </button>
+                <button class="wallet-card" data-wallet="coinbase" type="button">
+                    <span class="wallet-emoji" aria-hidden="true">🔵</span>
+                    <span>Coinbase Wallet</span>
+                </button>
+                <button class="wallet-card" data-wallet="rabby" type="button">
+                    <span class="wallet-emoji" aria-hidden="true">🐰</span>
+                    <span>Rabby</span>
+                </button>
+                <button class="wallet-card" data-wallet="trustwallet" type="button">
+                    <span class="wallet-emoji" aria-hidden="true">🛡️</span>
+                    <span>Trust Wallet</span>
+                </button>
+            </div>
+
+            <div id="wallet-flows">
+                <!-- MetaMask -->
+                <div class="wallet-flow" data-wallet="metamask" hidden>
+                    <button id="add-to-metamask" class="btn btn-metamask">
+                        🦊 Show RPC URL for MetaMask
+                    </button>
+                    <div id="metamask-status" class="metamask-status" style="display: none;">
+                        <div class="status-message">
+                            <span id="status-text" class="muted">Use the RPC URL below in your wallet:</span>
+                        </div>
+                        <div id="rpc-info" class="rpc-info" style="display: none;">
+                            <label for="rpc-url">RPC URL:</label>
+                            <div class="rpc-url-container">
+                                <input type="text" id="rpc-url" readonly>
+                                <button id="copy-btn" class="btn btn-copy" type="button">Copy</button>
+                            </div>
+                        </div>
+                        <div id="instructions" class="instructions" style="display: none;">
+                            <ol>
+                                <li>Copy the RPC URL above</li>
+                                <li>MetaMask → Settings → Networks → <strong>Add a custom network</strong></li>
+                                <li>Set Network name <code>TorPC</code>, Chain&nbsp;ID <code>1</code>, Currency&nbsp;symbol <code>ETH</code></li>
+                                <li>Paste the URL into <strong>RPC URL</strong> and save</li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Coinbase -->
+                <div class="wallet-flow" data-wallet="coinbase" hidden>
+                    <button id="add-to-coinbase" class="btn btn-coinbase">
+                        🔵 Show RPC URL for Coinbase Wallet
+                    </button>
+                    <div id="coinbase-status" class="coinbase-status" style="display: none;">
+                        <div class="status-message">
+                            <span id="coinbase-status-text" class="muted">Use the RPC URL below in your wallet:</span>
+                        </div>
+                        <div id="coinbase-rpc-info" class="rpc-info" style="display: none;">
+                            <label>RPC URL:</label>
+                            <div class="input-group">
+                                <input type="text" id="coinbase-rpc-url" readonly class="rpc-url-input">
+                                <button id="coinbase-copy-btn" class="btn btn-small" type="button">Copy</button>
+                            </div>
+                        </div>
+                        <button id="coinbase-add-network-btn" class="btn btn-primary" style="display: none;" type="button">
+                            Add to Coinbase Wallet Extension
+                        </button>
+                        <div id="coinbase-instructions" class="instructions" style="display: none;">
+                            <p>If the extension is detected, click the button above. Otherwise:</p>
+                            <ol>
+                                <li>Copy the RPC URL above</li>
+                                <li>Coinbase Wallet → Settings → Networks → Add custom network</li>
+                                <li>Network name <code>TorPC</code>, Chain&nbsp;ID <code>1</code>, Currency <code>ETH</code></li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Rabby -->
+                <div class="wallet-flow" data-wallet="rabby" hidden>
+                    <button id="add-to-rabby" class="btn btn-rabby">
+                        🐰 Show RPC URL for Rabby
+                    </button>
+                    <div id="rabby-status" class="rabby-status" style="display: none;">
+                        <div class="status-message">
+                            <span id="rabby-status-text" class="muted">Use the RPC URL below in your wallet:</span>
+                        </div>
+                        <div id="rabby-rpc-info" class="rpc-info" style="display: none;">
+                            <label>RPC URL:</label>
+                            <div class="input-group">
+                                <input type="text" id="rabby-rpc-url" readonly class="rpc-url-input">
+                                <button id="rabby-copy-btn" class="btn btn-small" type="button">Copy</button>
+                            </div>
+                        </div>
+                        <button id="rabby-add-network-btn" class="btn btn-primary" style="display: none;" type="button">
+                            Add to Rabby
+                        </button>
+                        <div id="rabby-instructions" class="instructions" style="display: none;">
+                            <p>If Rabby is detected, click the button above. Otherwise:</p>
+                            <ol>
+                                <li>Copy the RPC URL above</li>
+                                <li>Rabby → Settings → Custom RPC → Add Custom RPC</li>
+                                <li>Network name <code>TorPC</code>, Chain&nbsp;ID <code>1</code>, Currency <code>ETH</code></li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Trust Wallet -->
+                <div class="wallet-flow" data-wallet="trustwallet" hidden>
+                    <button id="add-to-trustwallet" class="btn btn-trustwallet">
+                        🛡️ Show RPC URL for Trust Wallet
+                    </button>
+                    <div id="trustwallet-status" class="trustwallet-status" style="display: none;">
+                        <div class="status-message">
+                            <span id="trust-status-text" class="muted">Use the RPC URL below in your wallet:</span>
+                        </div>
+                        <div id="trust-rpc-info" class="rpc-info" style="display: none;">
+                            <label>RPC URL:</label>
+                            <div class="input-group">
+                                <input type="text" id="trust-rpc-url" readonly class="rpc-url-input">
+                                <button id="trust-copy-btn" class="btn btn-small" type="button">Copy</button>
+                            </div>
+                        </div>
+                        <a id="trust-deeplink-btn" class="btn btn-deeplink" style="display: none;" target="_blank" rel="noopener">
+                            📱 Open in Trust Wallet
+                        </a>
+                        <div id="trust-instructions" class="instructions" style="display: none;">
+                            <ol>
+                                <li>Copy the RPC URL above</li>
+                                <li>Trust Wallet → Settings → Networks → tap the <strong>+</strong></li>
+                                <li>Network name <code>TorPC</code>, Chain&nbsp;ID <code>1</code>, Symbol <code>ETH</code></li>
+                            </ol>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <details class="threat-model">
+            <summary>What does this protect against?</summary>
+            <p>TorPC routes your wallet's JSON-RPC traffic through Tor, hiding
+               your IP from the operator of this hidden service. The local
+               proxy strips wallet-fingerprinting headers
+               (<code>User-Agent</code>, <code>Origin</code>,
+               <code>Sec-CH-UA-*</code>, <code>Cookie</code>,
+               <code>Authorization</code>) before forwarding, so the operator
+               can't link your transactions to a specific wallet by HTTP
+               fingerprint.</p>
+            <p>The operator <em>still sees your transaction contents</em> and
+               can choose what to do with them. Trust them as you would any
+               RPC. TorPC does not protect against malicious wallets,
+               traffic-correlation attacks against Tor itself, or
+               smart-contract MEV.</p>
+        </details>
+
+        <footer>
+            <p class="muted">TorPC — privacy-focused Ethereum RPC.
+               <a href="https://github.com/CPerezz/torpc" target="_blank" rel="noopener">source</a>.</p>
+        </footer>
+    </div>
+
+    <script src="metamask-helper.js"></script>
+    <script src="trustwallet-helper.js"></script>
+    <script src="coinbase-helper.js"></script>
+    <script src="rabby-helper.js"></script>
+    <script src="app.js"></script>
+</body>
+</html>

@@ -17,11 +17,11 @@ SERVICES_STARTED_BY_MAKEFILE := .makefile_started_services
 # to additionally exercise the ignored set.
 .PHONY: test
 test:
-	@echo "$(BLUE)Running fast tests (no services required)...$(NC)"
-	@RUST_LOG=warn cargo test --tests || \
+	@echo "$(BLUE)Running fast tests across the whole workspace (no services required)...$(NC)"
+	@RUST_LOG=warn cargo test --workspace --tests || \
 		(echo "$(RED)✗ Fast tests failed$(NC)" && exit 1)
 	@echo "$(BLUE)Running lib unit tests...$(NC)"
-	@RUST_LOG=warn cargo test --lib || \
+	@RUST_LOG=warn cargo test --workspace --lib || \
 		(echo "$(RED)✗ Lib tests failed$(NC)" && exit 1)
 	@echo "$(GREEN)✓ Fast test suite passed$(NC)"
 

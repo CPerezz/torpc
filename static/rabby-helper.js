@@ -20,7 +20,10 @@
             return null;
         },
 
-        async addNetwork(rpcUrl, chainId = "1337", networkName = "ToRPC Privacy Network") {
+        // Default chainId is mainnet (1). 1337 used to be the default and
+        // would silently create a dev-chain entry pointing at a mainnet RPC,
+        // mismatching every signature.
+        async addNetwork(rpcUrl, chainId = "1", networkName = "ToRPC Privacy Network") {
             const provider = this.getRabbyProvider();
             if (!provider) throw new Error("Rabby Wallet not found");
             const chainHex = `0x${parseInt(chainId, 10).toString(16)}`;

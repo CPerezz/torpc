@@ -18,14 +18,33 @@ use torpc::app::{build_app, AppConfig};
 use torpc::rate_limit::RateLimitConfig;
 use torpc::security::SecurityConfig;
 
-/// Make a `TestServer` driving the real production router with the given
-/// Geth URL. `tweak` lets a test mutate the default `AppConfig` before
-/// `build_app` runs (e.g. tighten the body limit, shorten the timeout).
-async fn make_server(geth_url: String, tweak: impl FnOnce(&mut AppConfig)) -> TestServer {
+/// `TestServer`s for both the public Tor-facing router and the localhost-only
+/// admin router. They share the same `MevProxyState` (so `/metrics` reflects
+/// counters incremented by `/rpc` traffic on the public side) but live on
+/// separate routers in production.
+struct DaemonServers {
+    /// Public, Tor-facing: `/rpc`, `/rpc/flashbots`, static UI.
+    public: TestServer,
+    /// Localhost-only: `/health`, `/metrics`.
+    admin: TestServer,
+}
+
+/// Build the real production routers via `build_app` against the given Geth
+/// URL. `tweak` lets a test mutate the default `AppConfig` before `build_app`
+/// runs (e.g. tighten the body limit, shorten the timeout).
+async fn make_servers(geth_url: String, tweak: impl FnOnce(&mut AppConfig)) -> DaemonServers {
     let mut config = AppConfig::for_testing(geth_url);
     tweak(&mut config);
     let built = build_app(config).await.expect("build_app must succeed");
-    TestServer::new(built.app).expect("TestServer must accept the production router")
+    DaemonServers {
+        public: TestServer::new(built.app).expect("public router must accept TestServer"),
+        admin: TestServer::new(built.admin_app).expect("admin router must accept TestServer"),
+    }
+}
+
+/// Convenience wrapper for tests that only need the public router.
+async fn make_server(geth_url: String, tweak: impl FnOnce(&mut AppConfig)) -> TestServer {
+    make_servers(geth_url, tweak).await.public
 }
 
 /// Builds a mockito mock that REQUIRES at least one matching call. The
@@ -37,14 +56,17 @@ async fn make_server(geth_url: String, tweak: impl FnOnce(&mut AppConfig)) -> Te
 fn mock_geth_block_number(server: &mut mockito::ServerGuard, value: &str) -> mockito::Mock {
     server
         .mock("POST", "/")
-        .match_header("content-type", mockito::Matcher::Regex("application/json.*".into()))
+        .match_header(
+            "content-type",
+            mockito::Matcher::Regex("application/json.*".into()),
+        )
         .match_body(mockito::Matcher::PartialJson(serde_json::json!({
             "jsonrpc": "2.0",
             "method": "eth_blockNumber",
         })))
         .with_status(200)
         .with_header("content-type", "application/json")
-        .with_body(format!(r#"{{"jsonrpc":"2.0","result":"{}","id":1}}"#, value))
+        .with_body(format!(r#"{{"jsonrpc":"2.0","result":"{value}","id":1}}"#))
         .expect_at_least(1)
         .create()
 }
@@ -125,8 +147,9 @@ async fn health_reports_minimal_process_uptime_payload() {
         .expect(0)
         .create();
 
-    let server = make_server(geth.url(), |_| {}).await;
-    let response = server.get("/health").await;
+    // /health lives on the admin router after the Phase-2 split.
+    let servers = make_servers(geth.url(), |_| {}).await;
+    let response = servers.admin.get("/health").await;
     assert_eq!(response.status_code(), 200);
     let body: Value = response.json();
     assert_eq!(body["status"], "ok");
@@ -143,15 +166,154 @@ async fn metrics_endpoint_exposes_live_counters() {
     let mut geth = Server::new_async().await;
     let _m = mock_geth_block_number(&mut geth, "0x1");
 
-    let server = make_server(geth.url(), |_| {}).await;
-    // Trip the blocked-method counter once.
-    let _ = server
+    // Public router for the request, admin router for /metrics. They share
+    // the same atomic counters so the count incremented on the public side
+    // is visible immediately on the admin side.
+    let servers = make_servers(geth.url(), |_| {}).await;
+    let _ = servers
+        .public
         .post("/rpc")
         .json(&json!({"jsonrpc": "2.0", "method": "eth_accounts", "id": 1}))
         .await;
-    let body: Value = server.get("/metrics").await.json();
+    let body: Value = servers.admin.get("/metrics").await.json();
     assert_eq!(body["security_metrics"]["invalid_methods"], 1);
     assert_eq!(body["security_metrics"]["blocked_requests_total"], 1);
+}
+
+// -----------------------------------------------------------------------------
+// Phase-3 audience-split regression guards. GET / picks `index_user.html`
+// vs `index_operator.html` based on the `Host` header — visitors via
+// .onion get the wallet-onboarding template, operator on LAN/loopback gets
+// the dashboard. These tests pin both branches so a future routing change
+// (e.g. accidentally re-introducing `nest_service("/", ...)`) is caught.
+// -----------------------------------------------------------------------------
+
+/// Marker strings unique to each template — chosen so a regression that
+/// served the wrong template (or a stale `index.html`) is loud.
+const USER_TEMPLATE_MARKER: &str = "Install the local TorPC client";
+const OPERATOR_TEMPLATE_MARKER: &str = "Operator dashboard";
+
+#[tokio::test]
+async fn root_serves_user_template_for_onion_host() {
+    let mut geth = Server::new_async().await;
+    let _m = mock_geth_block_number(&mut geth, "0x1");
+
+    let server = make_server(geth.url(), |_| {}).await;
+    let response = server
+        .get("/")
+        .add_header(
+            axum::http::HeaderName::from_static("host"),
+            axum::http::HeaderValue::from_static("abcdef0123456789.onion"),
+        )
+        .await;
+
+    assert_eq!(response.status_code(), 200);
+    let body = response.text();
+    assert!(
+        body.contains(USER_TEMPLATE_MARKER),
+        "expected user template marker in response body"
+    );
+    assert!(
+        !body.contains(OPERATOR_TEMPLATE_MARKER),
+        "operator marker leaked into .onion response — audience split is broken"
+    );
+}
+
+#[tokio::test]
+async fn root_serves_operator_template_for_loopback_host() {
+    let mut geth = Server::new_async().await;
+    let _m = mock_geth_block_number(&mut geth, "0x1");
+
+    let server = make_server(geth.url(), |_| {}).await;
+    let response = server
+        .get("/")
+        .add_header(
+            axum::http::HeaderName::from_static("host"),
+            axum::http::HeaderValue::from_static("127.0.0.1:8080"),
+        )
+        .await;
+
+    assert_eq!(response.status_code(), 200);
+    let body = response.text();
+    assert!(
+        body.contains(OPERATOR_TEMPLATE_MARKER),
+        "expected operator template marker in response body"
+    );
+    assert!(
+        !body.contains(USER_TEMPLATE_MARKER),
+        "user template leaked into operator response"
+    );
+}
+
+#[tokio::test]
+async fn root_with_port_in_onion_host_still_picks_user_template() {
+    // `Host: foo.onion:80` should still match — the port suffix used to
+    // confuse a literal `ends_with(".onion")` check. Pin the port-stripping
+    // behavior so a regression there doesn't quietly serve the operator
+    // template to .onion visitors.
+    let mut geth = Server::new_async().await;
+    let _m = mock_geth_block_number(&mut geth, "0x1");
+
+    let server = make_server(geth.url(), |_| {}).await;
+    let response = server
+        .get("/")
+        .add_header(
+            axum::http::HeaderName::from_static("host"),
+            axum::http::HeaderValue::from_static("foo.onion:80"),
+        )
+        .await;
+
+    assert_eq!(response.status_code(), 200);
+    assert!(response.text().contains(USER_TEMPLATE_MARKER));
+}
+
+#[tokio::test]
+async fn static_assets_still_serve_through_fallback() {
+    // The `nest_service("/", ServeDir)` → `route("/") + fallback_service(ServeDir)`
+    // refactor must not break delivery of assets like `app.js` and
+    // `style.css`. Without these, both templates are inert.
+    let mut geth = Server::new_async().await;
+    let _m = mock_geth_block_number(&mut geth, "0x1");
+
+    let server = make_server(geth.url(), |_| {}).await;
+    for asset in ["/app.js", "/style.css"] {
+        let response = server.get(asset).await;
+        assert_eq!(
+            response.status_code(),
+            200,
+            "{asset} must still be served by the static fallback"
+        );
+    }
+}
+
+/// Regression guard for the Phase-2 admin/public split. `/health` and
+/// `/metrics` must NOT be reachable through the Tor-facing router — that
+/// would publish operator-side state (uptime, version, component circuit
+/// state, blocked-request counters) to anonymous .onion visitors.
+#[tokio::test]
+async fn health_and_metrics_are_404_on_public_router() {
+    let mut geth = Server::new_async().await;
+    let _m = mock_geth_block_number(&mut geth, "0x1");
+
+    let servers = make_servers(geth.url(), |_| {}).await;
+
+    // Public side must 404 both endpoints.
+    let h = servers.public.get("/health").await;
+    assert_eq!(
+        h.status_code(),
+        404,
+        "/health must not be reachable on the Tor-facing router"
+    );
+    let m = servers.public.get("/metrics").await;
+    assert_eq!(
+        m.status_code(),
+        404,
+        "/metrics must not be reachable on the Tor-facing router"
+    );
+
+    // Admin side serves both happily.
+    assert_eq!(servers.admin.get("/health").await.status_code(), 200);
+    assert_eq!(servers.admin.get("/metrics").await.status_code(), 200);
 }
 
 // -----------------------------------------------------------------------------

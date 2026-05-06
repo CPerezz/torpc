@@ -1,49 +1,119 @@
-[package]
-name = "torpc"
+[workspace]
+# Single repo-wide workspace. Pre-consolidation there were two unrelated
+# workspaces (daemon at root, proxy under `torpc-proxy/`) with diverging
+# `tokio` and `thiserror` versions — this unifies them so a single
+# `cargo build`/`clippy`/`test` exercises everything and the lockfile
+# resolves once.
+members = [
+    "torpc-proxy/torpc-proxy-core",
+    "torpc-proxy/torpc-proxy-cli",
+    "torpc-proxy/torpc-proxy-gui",
+]
+resolver = "2"
+
+[workspace.package]
 version = "0.1.0"
 edition = "2021"
+authors = ["ToRPC Contributors"]
+license = "MIT"
+repository = "https://github.com/CPerezz/torpc"
 
-[dependencies]
-# Async runtime
-tokio = { version = "1.35", features = ["full"] }
-
-# Web framework
-axum = "0.7"
-tower = { version = "0.4", features = ["limit"] }
-tower-http = { version = "0.5", features = ["fs", "trace", "set-header", "limit", "timeout", "cors"] }
-
-# Serialization
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-
-# HTTP client
-reqwest = { version = "0.11", features = ["json", "socks"] }
+[workspace.dependencies]
+# Async + foundational
+tokio = { version = "1.40", features = ["full"] }
+anyhow = "1.0"
+thiserror = "2.0"
 
 # Logging
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 
-# Utilities
-uuid = { version = "1.6", features = ["v4", "serde"] }
-anyhow = "1.0"
-thiserror = "1.0"
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# HTTP/networking (proxy side)
+hyper = { version = "1.5", features = ["server", "client", "http1", "http2"] }
+hyper-util = { version = "0.1", features = ["client", "client-legacy", "http1", "http2", "tokio", "server"] }
+http-body-util = "0.1"
+bytes = "1.7"
+tokio-socks = "0.5"
+
+# CLI
+clap = { version = "4.5", features = ["derive"] }
+
+# Random (used by both daemon UUIDs and proxy discovery tokens)
+rand = "0.8"
+
+[workspace.lints.clippy]
+# Workspace-wide clippy guidance can be added here as the codebase
+# stabilizes. Empty for now to avoid surprise CI breakages on the
+# initial consolidation.
+
+# -----------------------------------------------------------------------------
+# Daemon (the root crate)
+# -----------------------------------------------------------------------------
+
+[package]
+name = "torpc"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+description = "Privacy-focused Ethereum RPC proxy served as a Tor hidden service"
+
+[dependencies]
+# Daemon HTTP stack — separate from the proxy's hyper-direct usage. axum
+# 0.7 is on hyper 1.x internally, so the workspace's hyper line is shared
+# transitively even though the daemon doesn't depend on hyper by name.
+axum = "0.7"
+tower = { version = "0.4", features = ["limit"] }
+tower-http = { version = "0.5", features = ["fs", "trace", "set-header", "limit", "timeout", "cors"] }
+reqwest = { version = "0.11", features = ["json", "socks"] }
+
+# Foundations (shared with proxy crates via workspace)
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+rand = { workspace = true }
+
+# Daemon-only
 once_cell = "1.19"
 chrono = { version = "0.4", features = ["serde"] }
+uuid = { version = "1.6", features = ["v4", "serde"] }
 
-# Cryptography for MEV
+# MEV crypto — secp256k1 0.27 is on a shared transitive curve with the
+# proxy's tokio-socks; no need to bump.
 secp256k1 = { version = "0.27", features = ["recovery"] }
 sha3 = "0.10"
 hex = "0.4"
-rand = "0.8"
+
+# Loads `.env` at startup so operators who `cp .env.example .env` get their
+# config applied without needing systemd EnvironmentFile= or `set -a; source`.
+dotenvy = "0.15"
 
 [dev-dependencies]
-# Testing
 mockito = "1.2"
-tempfile = "3.8"
+tempfile = "3.10"
 axum-test = "14.0"
+
+[target.'cfg(unix)'.dev-dependencies]
 # Send real signals (SIGTERM, SIGINT) to spawned daemon subprocesses in
 # integration tests. `Child::kill()` only sends SIGKILL, which bypasses
 # the graceful-shutdown path we want to verify.
-[target.'cfg(unix)'.dev-dependencies]
 nix = { version = "0.29", features = ["signal"] }
 
+# -----------------------------------------------------------------------------
+# Profiles (apply workspace-wide)
+# -----------------------------------------------------------------------------
+
+[profile.release]
+opt-level = 3
+lto = true
+strip = true
+codegen-units = 1

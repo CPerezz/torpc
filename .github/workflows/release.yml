@@ -1,0 +1,118 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+# Need write access to create the release and upload assets.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    name: build (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Linux x86_64
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive_ext: tar.gz
+          # macOS Intel
+          - os: macos-13
+            target: x86_64-apple-darwin
+            archive_ext: tar.gz
+          # macOS Apple Silicon
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive_ext: tar.gz
+          # Windows x86_64
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive_ext: zip
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      # Build the daemon and the CLI client. The Tauri GUI is intentionally
+      # excluded from the release for now — bundling needs platform-specific
+      # post-build steps (DMG, AppImage, MSI) that we'll add when there's
+      # demand. Source build of the GUI is documented in the README.
+      - name: build daemon + CLI client
+        run: |
+          cargo build --release --target ${{ matrix.target }} --bin torpc
+          cargo build --release --target ${{ matrix.target }} --bin torpc-proxy
+
+      # Pack each binary into the platform-conventional archive. macOS and
+      # Linux get tar.gz; Windows gets zip. Strip is implicit via the
+      # workspace [profile.release] `strip = true` setting.
+      - name: package (Unix)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for bin in torpc torpc-proxy; do
+            archive="${bin}-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+            tar -C "target/${{ matrix.target }}/release" -czf "dist/${archive}" "${bin}"
+            (cd dist && shasum -a 256 "${archive}" > "${archive}.sha256")
+          done
+          ls -la dist/
+
+      - name: package (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          foreach ($bin in @("torpc", "torpc-proxy")) {
+            $archive = "${bin}-${env:GITHUB_REF_NAME}-${{ matrix.target }}.zip"
+            $exe = "target/${{ matrix.target }}/release/${bin}.exe"
+            Compress-Archive -Path $exe -DestinationPath "dist/${archive}"
+            $hash = (Get-FileHash -Algorithm SHA256 "dist/${archive}").Hash.ToLower()
+            "$hash  ${archive}" | Out-File -Encoding ascii "dist/${archive}.sha256"
+          }
+          Get-ChildItem dist
+
+      - name: upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: dist-${{ matrix.target }}
+          path: dist/*
+          if-no-files-found: error
+
+  release:
+    name: publish release
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: collect artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: list collected artifacts
+        run: ls -la dist/
+
+      # Use the tag annotation as the release body if present, else fall back
+      # to a generic message. softprops/action-gh-release auto-generates a
+      # release on the corresponding tag.
+      - name: publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true
+          fail_on_unmatched_files: true

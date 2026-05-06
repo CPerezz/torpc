@@ -85,7 +85,7 @@ async fn daemon_subprocess_handles_request_and_shuts_down_on_sigterm() {
         .await;
 
     let port = pick_free_port().await;
-    let bind_addr = format!("127.0.0.1:{}", port);
+    let bind_addr = format!("127.0.0.1:{port}");
 
     let mut child = Command::new(env!("CARGO_BIN_EXE_torpc"))
         .env("BIND_ADDR", &bind_addr)
@@ -117,7 +117,7 @@ async fn daemon_subprocess_handles_request_and_shuts_down_on_sigterm() {
     }
 
     // 2. Real HTTP request through the actual daemon.
-    let url = format!("http://{}/rpc", bind_addr);
+    let url = format!("http://{bind_addr}/rpc");
     let response = reqwest::Client::new()
         .post(&url)
         .json(&json!({"jsonrpc": "2.0", "method": "eth_blockNumber", "id": 1}))
@@ -187,11 +187,9 @@ async fn daemon_subprocess_exits_non_zero_on_bad_bind_addr() {
 #[tokio::test]
 async fn daemon_subprocess_exits_non_zero_when_port_already_bound() {
     // Hold the port for the lifetime of the test.
-    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
-        .await
-        .unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
-    let bind_addr = format!("127.0.0.1:{}", port);
+    let bind_addr = format!("127.0.0.1:{port}");
 
     let child = Command::new(env!("CARGO_BIN_EXE_torpc"))
         .env("BIND_ADDR", &bind_addr)

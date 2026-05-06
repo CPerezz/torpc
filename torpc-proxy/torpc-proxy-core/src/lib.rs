@@ -56,7 +56,7 @@ impl ProxyController {
 
         let task_handle = tokio::spawn(async move {
             info!("Starting proxy...");
-            
+
             // Update status to running
             {
                 let mut status = status_clone.write().await;
@@ -86,11 +86,11 @@ impl ProxyController {
         if let Some(h) = handle.take() {
             *status = ProxyStatus::Stopping;
             drop(status); // Release the lock
-            
+
             info!("Stopping proxy...");
             h.abort();
             let _ = h.await; // Wait for it to finish
-            
+
             let mut status = self.status.write().await;
             *status = ProxyStatus::Stopped;
         }
@@ -114,12 +114,12 @@ impl ProxyController {
         // Stop if running
         if self.is_running().await {
             self.stop().await?;
-            
+
             // Update config
             let mut config = self.config.write().await;
             *config = new_config;
             drop(config);
-            
+
             // Restart
             self.start().await?;
         } else {
@@ -127,7 +127,7 @@ impl ProxyController {
             let mut config = self.config.write().await;
             *config = new_config;
         }
-        
+
         Ok(())
     }
 
@@ -158,13 +158,13 @@ mod tests {
         // Start the proxy
         controller.start().await.unwrap();
         tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
-        
+
         // Should be running
         assert!(controller.is_running().await);
 
         // Stop the proxy
         controller.stop().await.unwrap();
-        
+
         // Should be stopped
         assert_eq!(controller.get_status().await, ProxyStatus::Stopped);
         assert!(!controller.is_running().await);

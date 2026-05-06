@@ -33,13 +33,18 @@ use torpc::rate_limit::RateLimitConfig;
 /// Boot the production router on an ephemeral port. Returns the bound
 /// address (so the test can connect) and a `JoinHandle` the caller can
 /// abort when done. Mirrors the exact wiring `main.rs` uses.
-async fn boot_daemon(geth_url: String, tweak: impl FnOnce(&mut AppConfig)) -> (SocketAddr, tokio::task::JoinHandle<()>) {
+async fn boot_daemon(
+    geth_url: String,
+    tweak: impl FnOnce(&mut AppConfig),
+) -> (SocketAddr, tokio::task::JoinHandle<()>) {
     let mut config = AppConfig::for_testing(geth_url);
     tweak(&mut config);
 
     let built = build_app(config).await.expect("build_app must succeed");
 
-    let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind ephemeral port");
+    let listener = TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind ephemeral port");
     let addr = listener.local_addr().expect("local_addr");
 
     let handle = tokio::spawn(async move {
@@ -49,7 +54,9 @@ async fn boot_daemon(geth_url: String, tweak: impl FnOnce(&mut AppConfig)) -> (S
         // and the per-source-port test below can never pass.
         let _ = axum::serve(
             listener,
-            built.app.into_make_service_with_connect_info::<SocketAddr>(),
+            built
+                .app
+                .into_make_service_with_connect_info::<SocketAddr>(),
         )
         .await;
     });
@@ -76,7 +83,7 @@ fn block_number_mock(server: &mut mockito::ServerGuard) -> mockito::Mock {
 
 async fn post_block_number(client: &reqwest::Client, addr: SocketAddr) -> reqwest::Response {
     client
-        .post(format!("http://{}/rpc", addr))
+        .post(format!("http://{addr}/rpc"))
         .header("connection", "close")
         .json(&json!({"jsonrpc": "2.0", "method": "eth_blockNumber", "id": 1}))
         .send()
@@ -147,7 +154,7 @@ async fn same_connection_shares_bucket_and_trips_limit() {
     // Default keep-alive pool. Sequential requests reuse the same TCP
     // connection (same source port) for the duration of the test.
     let client = reqwest::Client::new();
-    let url = format!("http://{}/rpc", addr);
+    let url = format!("http://{addr}/rpc");
 
     let r1 = client
         .post(&url)
@@ -199,7 +206,7 @@ async fn real_socket_round_trip_returns_mocked_block_number() {
 
     let client = reqwest::Client::new();
     let response = client
-        .post(format!("http://{}/rpc", addr))
+        .post(format!("http://{addr}/rpc"))
         .json(&json!({"jsonrpc": "2.0", "method": "eth_blockNumber", "id": 1}))
         .send()
         .await
@@ -233,7 +240,7 @@ async fn two_clients_dont_share_state_across_their_lifetime() {
     // connection from its own source port.
     let client_a = reqwest::Client::new();
     let client_b = reqwest::Client::new();
-    let url = format!("http://{}/rpc", addr);
+    let url = format!("http://{addr}/rpc");
 
     // Exhaust client A's bucket.
     for _ in 0..2 {
