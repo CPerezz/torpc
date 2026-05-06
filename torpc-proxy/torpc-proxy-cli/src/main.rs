@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use tracing::{error, info};
+use tracing::{debug, error, info};
 use tracing_subscriber::EnvFilter;
 
 use torpc_proxy_core::{Config, ProxyConfig, TorRpcProxy};
@@ -14,9 +14,12 @@ struct Cli {
     #[command(subcommand)]
     command: Option<Commands>,
 
-    /// Configuration file path
-    #[arg(short, long, default_value = "torpc-proxy.toml")]
-    config: PathBuf,
+    /// Configuration file path. When unspecified, the CLI looks at
+    /// `dirs::config_dir() / torpc-proxy / config.toml` first (shared with
+    /// the GUI), then falls back to `./torpc-proxy.toml` for backward
+    /// compatibility with cwd-based setups.
+    #[arg(short, long)]
+    config: Option<PathBuf>,
 }
 
 #[derive(Subcommand)]
@@ -30,18 +33,34 @@ enum Commands {
         /// Onion endpoint (overrides config)
         #[arg(short, long)]
         onion: Option<String>,
+
+        /// Tor SOCKS5 host (overrides config; default 127.0.0.1)
+        #[arg(long)]
+        tor_host: Option<String>,
+
+        /// Tor SOCKS5 port (overrides config; default 9050 — Tor Browser uses 9150)
+        #[arg(long)]
+        tor_port: Option<u16>,
     },
 
     /// Show the default configuration
     Config,
 
-    /// Test Tor connectivity
-    Test,
+    /// Test Tor connectivity. Probes a well-known onion to confirm Tor is
+    /// reachable, then probes the configured `onion_endpoint` if present.
+    Test {
+        /// Tor SOCKS5 host (overrides config; default 127.0.0.1)
+        #[arg(long)]
+        tor_host: Option<String>,
+
+        /// Tor SOCKS5 port (overrides config; default 9050)
+        #[arg(long)]
+        tor_port: Option<u16>,
+    },
 }
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    // Initialize logging
     tracing_subscriber::fmt()
         .with_env_filter(
             EnvFilter::try_from_default_env()
@@ -50,29 +69,56 @@ async fn main() -> Result<()> {
         .init();
 
     let cli = Cli::parse();
+    let config_path = resolve_config_path(cli.config.clone());
 
-    match &cli.command {
-        Some(Commands::Start { port, onion }) => {
-            start_proxy(cli.config, *port, onion.clone()).await
-        }
+    match cli.command {
+        Some(Commands::Start {
+            port,
+            onion,
+            tor_host,
+            tor_port,
+        }) => start_proxy(config_path, port, onion, tor_host, tor_port).await,
         Some(Commands::Config) => {
             show_default_config();
             Ok(())
         }
-        Some(Commands::Test) => test_tor_connectivity().await,
-        None => {
-            // Default to start if no subcommand
-            start_proxy(cli.config, None, None).await
+        Some(Commands::Test { tor_host, tor_port }) => {
+            test_tor_connectivity(config_path, tor_host, tor_port).await
+        }
+        None => start_proxy(config_path, None, None, None, None).await,
+    }
+}
+
+/// Resolve which `Config` file the CLI should read.
+///
+/// Priority:
+/// 1. `--config` flag (explicit user choice; honour even if missing).
+/// 2. `dirs::config_dir() / torpc-proxy / config.toml` (shared with the GUI).
+/// 3. `./torpc-proxy.toml` (cwd; backward-compat with operator setups that
+///    pre-date the user-config path).
+///
+/// The returned path may not exist on disk — `start_proxy` falls back to
+/// `Config::default()` in that case.
+fn resolve_config_path(explicit: Option<PathBuf>) -> PathBuf {
+    if let Some(path) = explicit {
+        return path;
+    }
+    if let Some(user) = dirs::config_dir().map(|d| d.join("torpc-proxy/config.toml")) {
+        if user.exists() {
+            debug!("Using user-config path {:?}", user);
+            return user;
         }
     }
+    PathBuf::from("torpc-proxy.toml")
 }
 
 async fn start_proxy(
     config_path: PathBuf,
     port_override: Option<u16>,
     onion_override: Option<String>,
+    tor_host_override: Option<String>,
+    tor_port_override: Option<u16>,
 ) -> Result<()> {
-    // Load configuration
     let mut config = if config_path.exists() {
         Config::load_from_file(&config_path).context("Failed to load configuration")?
     } else {
@@ -80,43 +126,43 @@ async fn start_proxy(
         Config::default()
     };
 
-    // Apply command-line overrides
     if let Some(port) = port_override {
         config.port = port;
     }
     if let Some(onion) = onion_override {
         config.onion_endpoint = onion;
     }
+    if let Some(host) = tor_host_override {
+        config.tor_proxy_host = host;
+    }
+    if let Some(port) = tor_port_override {
+        config.tor_proxy_port = port;
+    }
 
-    // Validate configuration
     if config.onion_endpoint.is_empty() {
         error!("No onion endpoint specified!");
-        error!("Please provide --onion flag or set onion_endpoint in config file");
+        error!("Provide --onion <addr.onion:port> or set onion_endpoint in the config file");
         std::process::exit(1);
     }
 
-    // Create proxy configuration
     let proxy_config = ProxyConfig {
         listen_addr: ([127, 0, 0, 1], config.port).into(),
         tor_proxy: config.tor_proxy_addr(),
         onion_endpoint: config.onion_endpoint,
     };
 
-    // Create and run proxy
     let proxy = TorRpcProxy::new(proxy_config);
 
     info!("Starting ToRPC proxy...");
     info!("Wallet RPC URL: http://localhost:{}", config.port);
     info!("Press Ctrl+C to stop");
 
-    // Handle shutdown gracefully
     let proxy_handle = tokio::spawn(async move {
         if let Err(e) = proxy.run().await {
             error!("Proxy error: {}", e);
         }
     });
 
-    // Wait for Ctrl+C
     tokio::signal::ctrl_c()
         .await
         .context("Failed to install signal handler")?;
@@ -144,18 +190,42 @@ fn show_default_config() {
     println!("log_level = \"info\"");
 }
 
-async fn test_tor_connectivity() -> Result<()> {
+/// Probe the local Tor daemon and (if configured) the user's onion endpoint.
+///
+/// `tor_host_override` / `tor_port_override` come from `--tor-host` /
+/// `--tor-port`. Without overrides we fall back to the values in the
+/// configured file (so a Tor Browser user with `tor_proxy_port = 9150`
+/// gets the right address tested). Pre-PR-1 the test hardcoded 9050,
+/// which produced confusing "Tor not running" errors for those users.
+async fn test_tor_connectivity(
+    config_path: PathBuf,
+    tor_host_override: Option<String>,
+    tor_port_override: Option<u16>,
+) -> Result<()> {
     use std::time::Duration;
     use tokio::time::timeout;
     use tokio_socks::tcp::Socks5Stream;
 
     info!("Testing Tor connectivity...");
 
-    // Step 1: confirm Tor itself is reachable by hitting a well-known onion.
-    // DuckDuckGo's onion is stable and tolerates a single TCP probe.
-    let tor_addr: SocketAddr = ([127, 0, 0, 1], 9050).into();
+    let config = if config_path.exists() {
+        Config::load_from_file(&config_path).unwrap_or_else(|e| {
+            info!("Could not load {:?}: {}; using defaults", config_path, e);
+            Config::default()
+        })
+    } else {
+        Config::default()
+    };
+
+    let tor_host = tor_host_override.unwrap_or(config.tor_proxy_host.clone());
+    let tor_port = tor_port_override.unwrap_or(config.tor_proxy_port);
+    let tor_addr: SocketAddr = format!("{tor_host}:{tor_port}")
+        .parse()
+        .with_context(|| format!("Invalid Tor SOCKS5 address: {tor_host}:{tor_port}"))?;
     info!("Using Tor SOCKS5 proxy at: {}", tor_addr);
 
+    // Step 1: confirm Tor itself is reachable by hitting a well-known onion.
+    // DuckDuckGo's onion is stable and tolerates a single TCP probe.
     let well_known = "duckduckgogg42xjoc72x3sjasowoarfbgcmvfimaftt6twagswzczad.onion:80";
     info!("Step 1: probing Tor reachability via {}", well_known);
     let probe = Socks5Stream::connect(tor_addr, well_known);
@@ -163,7 +233,10 @@ async fn test_tor_connectivity() -> Result<()> {
         Ok(Ok(_)) => info!("✓ Tor is reachable; SOCKS5 working"),
         Ok(Err(e)) => {
             error!("✗ Tor SOCKS5 reach test failed: {}", e);
-            error!("Make sure Tor is running and listening on port 9050");
+            error!(
+                "Make sure Tor is running and listening on {} (Tor Browser uses 9150)",
+                tor_addr
+            );
             return Err(e.into());
         }
         Err(_) => {
@@ -172,26 +245,17 @@ async fn test_tor_connectivity() -> Result<()> {
         }
     }
 
-    // Step 2: also probe the user's *configured* onion endpoint, since that's
-    // the one their wallet will actually use. Tor itself working doesn't
-    // imply the configured onion is up, and that's the more common failure.
-    let config_path = PathBuf::from("torpc-proxy.toml");
-    let configured = if config_path.exists() {
-        match Config::load_from_file(&config_path) {
-            Ok(c) if !c.onion_endpoint.is_empty() => Some(c.onion_endpoint),
-            _ => None,
-        }
-    } else {
-        None
-    };
-
-    if let Some(onion) = configured {
-        info!("Step 2: probing configured onion {}", onion);
-        let probe = Socks5Stream::connect(tor_addr, onion.as_str());
+    // Step 2: probe the configured onion (the more common failure mode).
+    if !config.onion_endpoint.is_empty() {
+        info!("Step 2: probing configured onion {}", config.onion_endpoint);
+        let probe = Socks5Stream::connect(tor_addr, config.onion_endpoint.as_str());
         match timeout(Duration::from_secs(30), probe).await {
             Ok(Ok(_)) => info!("✓ Configured onion endpoint is reachable"),
             Ok(Err(e)) => {
-                error!("✗ Could not reach configured onion {}: {}", onion, e);
+                error!(
+                    "✗ Could not reach configured onion {}: {}",
+                    config.onion_endpoint, e
+                );
                 error!("Confirm the .onion address is correct and the remote service is up");
                 return Err(e.into());
             }
@@ -201,7 +265,7 @@ async fn test_tor_connectivity() -> Result<()> {
             }
         }
     } else {
-        info!("Step 2 skipped: no `onion_endpoint` configured in torpc-proxy.toml");
+        info!("Step 2 skipped: no `onion_endpoint` configured");
     }
 
     Ok(())

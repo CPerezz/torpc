@@ -165,7 +165,12 @@ impl TorRpcProxy {
                 discovery_port, e
             ),
         }
-        info!("Discovery token (X-Torpc-Token): {}", token);
+        // Token is already persisted at mode 0600 to ${XDG_RUNTIME_DIR:-/tmp}/
+        // torpc-discovery.token; printing it at INFO duplicates that info into
+        // journal/syslog where any local user with log access can grab it.
+        // Trusted local clients should read the file. Operators wanting to
+        // see the token at startup can `RUST_LOG=debug`.
+        debug!("Discovery token (X-Torpc-Token): {}", token);
         let token = Arc::new(token);
 
         tokio::spawn(async move {

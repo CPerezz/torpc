@@ -1,16 +1,23 @@
 # ToRPC Proxy Configuration Example
-# Copy this file to torpc-proxy.toml and modify as needed
+#
+# Copy this file to torpc-proxy.toml in the working directory, or to
+# `dirs::config_dir() / torpc-proxy / config.toml` (e.g.
+# ~/Library/Application Support/torpc-proxy/config.toml on macOS,
+# ~/.config/torpc-proxy/config.toml on Linux). The CLI looks at the
+# user-config path first, then falls back to cwd.
 
-# Port for wallet connections (default: 8545)
-port = 9000
+# Port for wallet connections (default: 8545 — wallets expect this)
+port = 8545
 
 # Tor SOCKS5 proxy settings
 tor_proxy_host = "127.0.0.1"
 tor_proxy_port = 9050
 
 # Your .onion RPC endpoint
-# Replace with your actual onion address
-onion_endpoint = "pxglb4naobvtpmnnvmsqmqgmfougct7en7xfqdevao6nrkmgmgrzopid.onion:80"
+# Replace with the operator's actual onion address — leaving the example
+# value here causes confusing failures (the proxy chases a non-existent
+# hidden service and the wallet just sees timeouts).
+onion_endpoint = ""
 
 # Logging level (trace, debug, info, warn, error)
-log_level = "trace"
+log_level = "info"
