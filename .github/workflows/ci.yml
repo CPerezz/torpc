@@ -13,13 +13,6 @@ env:
   # `make test-with-services` only. Keep CI service-free by NOT passing
   # --include-ignored anywhere in this workflow.
   RUST_BACKTRACE: 1
-  # The Tauri 1.x GUI crate (`torpc-proxy-gui`) pulls in webkit2gtk-4.0 +
-  # libsoup-2.4, which Ubuntu 24.04 (the `ubuntu-latest` image) no longer
-  # ships. Excluding it from clippy/test/build keeps CI fast and avoids
-  # a dependency chain that's irrelevant to the daemon's correctness; the
-  # GUI is verified locally and via the release pipeline. Migrate to
-  # Tauri 2.x to bring it back in.
-  WORKSPACE_NO_GUI: --workspace --exclude torpc-proxy-gui
 
 jobs:
   fmt:
@@ -33,35 +26,59 @@ jobs:
       - name: cargo fmt --check
         run: cargo fmt --all --check
 
+  # clippy and test cover the full workspace including the Tauri GUI crate.
+  # Tauri 1.x links against `libwebkit2gtk-4.0` + `libsoup2.4`, both of
+  # which Ubuntu 24.04 (the `ubuntu-latest` image) dropped in favor of -4.1
+  # / -3.0. Pin to `ubuntu-22.04` until the GUI migrates to Tauri 2.x —
+  # ubuntu-22.04 GH runner support extends well past that migration.
   clippy:
     name: clippy
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+      - name: install Tauri 1.x system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.0-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup2.4-dev
       - name: clippy
-        run: cargo clippy ${{ env.WORKSPACE_NO_GUI }} --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
   test:
     name: test (no services)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-22.04
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+      - name: install Tauri 1.x system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.0-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup2.4-dev
       - name: build
-        run: cargo build ${{ env.WORKSPACE_NO_GUI }}
+        run: cargo build --workspace
       - name: tests
-        run: cargo test ${{ env.WORKSPACE_NO_GUI }} --tests
+        run: cargo test --workspace --tests
 
-  # Vulnerability scan against RustSec advisory DB. Signal-only for now —
-  # `|| true` swallows non-zero exit so the check passes while we still log
-  # the report. Three known transitive vulns (bytes / slab / tracing-
-  # subscriber) need ecosystem fixes; tighten this to a hard failure once
-  # those land.
+  # Mandatory: any new RUSTSEC vulnerability against a crate in `Cargo.lock`
+  # fails the pipeline. Default cargo-audit behavior treats unmaintained /
+  # unsound / yanked as informational warnings, which is the right balance
+  # here — the Tauri 1.x dep tree carries some unmaintained transitives that
+  # we'll clear when we migrate to 2.x; surfacing them as hard errors today
+  # would block the daemon from shipping for an unrelated reason.
   audit:
     name: cargo audit
     runs-on: ubuntu-latest
@@ -70,5 +87,5 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - name: install cargo-audit
         run: cargo install --locked cargo-audit
-      - name: cargo audit (advisory)
-        run: cargo audit || true
+      - name: cargo audit
+        run: cargo audit
