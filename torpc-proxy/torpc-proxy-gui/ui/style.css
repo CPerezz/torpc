@@ -514,3 +514,190 @@ small {
         padding: 20px;
     }
 }
+/* -----------------------------------------------------------------------
+   Error modal
+   -----------------------------------------------------------------------
+   Used for failures the user must explicitly acknowledge — most notably,
+   the Start Proxy pre-flight verification failure. The inline `.message`
+   banner sits at the bottom of the form and is easy to miss; this modal
+   dims the rest of the UI, slides in from above, and shakes once on
+   appearance to draw the eye. Close on backdrop click, the X button,
+   or the Esc key (handled in JS).
+*/
+
+.modal-overlay {
+    position: fixed;
+    inset: 0;
+    background: rgba(8, 8, 18, 0.72);
+    backdrop-filter: blur(4px);
+    -webkit-backdrop-filter: blur(4px);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 1000;
+    animation: modalFadeIn 0.18s ease-out;
+}
+
+.modal-overlay[hidden] {
+    display: none;
+}
+
+.modal-card {
+    background: linear-gradient(180deg, #1a1a2e 0%, #2a1a3e 100%);
+    border: 1px solid rgba(239, 68, 68, 0.35);
+    border-radius: 12px;
+    padding: 28px 32px;
+    max-width: 440px;
+    width: 90%;
+    box-shadow:
+        0 24px 64px rgba(0, 0, 0, 0.55),
+        0 0 0 1px rgba(255, 255, 255, 0.04) inset,
+        0 0 32px rgba(239, 68, 68, 0.18);
+    animation: modalShake 0.45s cubic-bezier(.36,.07,.19,.97);
+}
+
+.modal-header {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    margin-bottom: 16px;
+}
+
+.modal-icon {
+    font-size: 30px;
+    line-height: 1;
+    /* Subtle pulse so the eye lands on the warning glyph first. */
+    animation: iconPulse 1.6s ease-in-out infinite;
+}
+
+.modal-card h3 {
+    font-size: 20px;
+    font-weight: 600;
+    color: var(--danger);
+    margin: 0;
+}
+
+.modal-body {
+    font-size: 15px;
+    line-height: 1.55;
+    color: var(--text-primary);
+    margin-bottom: 22px;
+    word-break: break-word;
+}
+
+.modal-close {
+    width: 100%;
+    background: var(--danger);
+    border: none;
+}
+
+.modal-close:hover {
+    background: #dc2626;
+}
+
+@keyframes modalFadeIn {
+    from { opacity: 0; }
+    to   { opacity: 1; }
+}
+
+@keyframes modalShake {
+    0%, 100% { transform: translateX(0); }
+    10%      { transform: translateX(-8px); }
+    20%      { transform: translateX(8px); }
+    30%      { transform: translateX(-6px); }
+    40%      { transform: translateX(6px); }
+    50%      { transform: translateX(-4px); }
+    60%      { transform: translateX(4px); }
+    70%      { transform: translateX(-2px); }
+    80%      { transform: translateX(2px); }
+    90%      { transform: translateX(0); }
+}
+
+@keyframes iconPulse {
+    0%, 100% { transform: scale(1);   opacity: 1;   }
+    50%      { transform: scale(1.1); opacity: 0.85; }
+}
+
+/* -----------------------------------------------------------------------
+   Toasts
+   -----------------------------------------------------------------------
+   Top-right floating notifications for routine feedback. Auto-dismiss
+   for transient messages; persistent (`duration: 0`) for in-progress
+   operations that the caller dismisses explicitly when done.
+
+   Stacking: toasts append to `.toast-container`, which is a flex column
+   with a gap. New toasts slide in from the right; older toasts shift down
+   smoothly via the parent's flex layout.
+*/
+
+.toast-container {
+    position: fixed;
+    top: 20px;
+    right: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 10px;
+    z-index: 1100;
+    pointer-events: none; /* container is transparent to clicks */
+    max-width: 420px;
+    width: calc(100% - 40px);
+}
+
+.toast {
+    pointer-events: auto;
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    padding: 14px 16px;
+    background: linear-gradient(180deg, #1a1a2e 0%, #251a35 100%);
+    border-left: 4px solid var(--text-muted);
+    border-radius: 8px;
+    box-shadow: 0 12px 32px rgba(0, 0, 0, 0.45),
+                0 0 0 1px rgba(255, 255, 255, 0.04) inset;
+    color: var(--text-primary);
+    font-size: 14px;
+    line-height: 1.5;
+    transform: translateX(110%);
+    opacity: 0;
+    transition: transform 0.22s cubic-bezier(.22,.61,.36,1),
+                opacity 0.22s ease;
+    cursor: pointer;
+    word-break: break-word;
+}
+
+.toast.toast-visible {
+    transform: translateX(0);
+    opacity: 1;
+}
+
+.toast.toast-leaving {
+    transform: translateX(110%);
+    opacity: 0;
+}
+
+.toast-icon {
+    flex: 0 0 auto;
+    font-size: 18px;
+    line-height: 1.2;
+    margin-top: 1px;
+}
+
+.toast-body {
+    flex: 1 1 auto;
+}
+
+/* Type variants — left border + icon color shift, otherwise consistent. */
+.toast-success {
+    border-left-color: var(--success);
+}
+.toast-success .toast-icon { color: var(--success); }
+
+.toast-error {
+    border-left-color: var(--danger);
+}
+.toast-error .toast-icon { color: var(--danger); }
+
+.toast-info {
+    border-left-color: var(--eth-blue);
+}
+.toast-info .toast-icon { color: var(--eth-blue); }

@@ -29,23 +29,34 @@
                 </div>
             </div>
             <div class="control-buttons">
+                <!--
+                    Order matters: Start/Stop on the left (the primary
+                    "make this run" action a wallet user reaches for) and
+                    Save Settings on the right (the secondary "edit then
+                    persist" action). Save uses `form="configForm"` so
+                    HTML5 still routes its click to the form's submit
+                    handler in app.js even though it's rendered outside
+                    the form.
+                -->
                 <button type="button" class="btn btn-success" id="startBtn">Start Proxy</button>
                 <button type="button" class="btn btn-danger" id="stopBtn" style="display: none;">Stop Proxy</button>
+                <button type="submit" form="configForm" class="btn btn-primary" id="saveBtn">Save Settings</button>
             </div>
         </div>
 
         <form id="configForm">
             <div class="form-group">
                 <label for="onionEndpoint">Onion Endpoint</label>
-                <input 
-                    type="text" 
-                    id="onionEndpoint" 
-                    name="onionEndpoint" 
-                    placeholder="example.onion:80"
-                    title="Enter your .onion address with port (e.g., pxglb4naobvtpmnnvmsqmqgmfougct7en7xfqdevao6nrkmgmgrzopid.onion:80)"
+                <input
+                    type="text"
+                    id="onionEndpoint"
+                    name="onionEndpoint"
+                    placeholder="xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx.onion:80"
+                    title="Enter the operator's .onion address with port, e.g. pxglb4naobvtpmnnvmsqmqgmfougct7en7xfqdevao6nrkmgmgrzopid.onion:80"
                     required
+                    pattern="[a-z2-7]{56}\.onion(:\d+)?"
                 >
-                <small>The .onion address of your ToRPC server</small>
+                <small>v3 onion: 56 base32 chars (a-z, 2-7) + <code>.onion</code>, optional <code>:port</code> (default 80). Save persists; click Start Proxy to actually run.</small>
             </div>
 
             <div class="form-group">
@@ -74,14 +85,42 @@
                 <small>Tor SOCKS5 proxy address</small>
             </div>
 
-            <div class="button-group">
-                <button type="submit" class="btn btn-primary">Save Settings</button>
-                <button type="button" class="btn btn-secondary" id="testBtn">Test Connection</button>
-                <button type="button" class="btn btn-secondary" id="closeBtn">Close</button>
-            </div>
+            <!--
+                The form has no inline button group anymore. Save Settings
+                lives next to Start/Stop in `.control-buttons` (linked back
+                via `form="configForm"`). The standalone "Test Connection"
+                button was removed because Start Proxy now runs the same
+                probe automatically before flipping to Running. The "Close"
+                button was removed because the OS close-button already
+                hides the window into the system tray.
+            -->
         </form>
 
-        <div class="message" id="message"></div>
+    </div>
+
+    <!--
+        Toast container — top-right floating notifications for routine
+        feedback (Save success, Test result, Start/Stop, validation errors).
+        Multiple toasts stack vertically. aria-live="polite" lets screen
+        readers announce new toasts without interrupting other speech.
+    -->
+    <div id="toastContainer" class="toast-container" aria-live="polite" aria-atomic="false"></div>
+
+    <!--
+        Error modal — surfaced for failures the user MUST acknowledge
+        (verification failure on Start Proxy). Dim backdrop blocks input;
+        toasts are non-blocking. Use modal sparingly — only when the user
+        needs to read and dismiss before the UI is useful again.
+    -->
+    <div id="errorModal" class="modal-overlay" role="dialog" aria-labelledby="errorModalTitle" aria-modal="true" hidden>
+        <div class="modal-card" role="document">
+            <div class="modal-header">
+                <span class="modal-icon" aria-hidden="true">⚠</span>
+                <h3 id="errorModalTitle">Something went wrong</h3>
+            </div>
+            <p id="errorModalBody" class="modal-body"></p>
+            <button id="errorModalClose" type="button" class="btn btn-primary modal-close">Got it</button>
+        </div>
     </div>
 
     <script src="app.js"></script>
