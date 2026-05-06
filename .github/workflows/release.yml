@@ -27,7 +27,11 @@ jobs:
         include:
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-          - os: macos-13
+          # Both macOS legs run on Apple Silicon (`macos-latest`). The
+          # x86_64 build cross-compiles via the rustc target installed
+          # by `dtolnay/rust-toolchain`. macos-13 (Intel) runners are
+          # queue-capacity-limited as GitHub winds them down.
+          - os: macos-latest
             target: x86_64-apple-darwin
           - os: macos-latest
             target: aarch64-apple-darwin
@@ -209,7 +213,11 @@ jobs:
   # -------------------------------------------------------------------------
   build-gui-darwin:
     name: gui (universal-apple-darwin)
-    runs-on: macos-13
+    # Apple Silicon runner. Both rustc targets (x86_64 + aarch64) are
+    # installed below; Tauri's `--target universal-apple-darwin` does
+    # the lipo dance. macos-13 (Intel) is being phased out and was
+    # spending 20+ minutes in the runner queue.
+    runs-on: macos-latest
     steps:
       - uses: actions/checkout@v4
 
