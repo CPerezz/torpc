@@ -248,11 +248,15 @@ jobs:
             version="dev-${GITHUB_SHA:0:8}"
           fi
           # Universal output is at target/universal-apple-darwin/release/bundle/dmg.
-          # Use `mapfile` + an explicit count check so we fail loudly
-          # instead of silently dropping a second DMG (Tauri sometimes
-          # produces a sidecar updater DMG when configured) or proceeding
-          # with an empty path.
-          mapfile -t dmgs < <(find target/universal-apple-darwin/release/bundle/dmg -name "*.dmg")
+          # Use a portable while-read loop instead of `mapfile` — macOS
+          # ships bash 3.2 by default, which predates `mapfile` (bash 4+).
+          # The explicit count check still catches "no DMGs" and "multiple
+          # DMGs" (Tauri sometimes produces a sidecar updater DMG when
+          # configured) before we'd silently drop one.
+          dmgs=()
+          while IFS= read -r line; do
+            dmgs+=("$line")
+          done < <(find target/universal-apple-darwin/release/bundle/dmg -name "*.dmg")
           if [[ ${#dmgs[@]} -ne 1 ]]; then
             echo "Expected exactly 1 DMG, found ${#dmgs[@]}: ${dmgs[*]:-<none>}" >&2
             exit 1
