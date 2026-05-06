@@ -40,6 +40,14 @@ jobs:
         with:
           components: clippy
       - uses: Swatinem/rust-cache@v2
+        with:
+          # rust-cache keys on `runner.os` ("Linux") which is shared
+          # between ubuntu-latest (24.04) and ubuntu-22.04. Without a
+          # per-image prefix, build-script binaries cached on 24.04
+          # (GLIBC 2.39) leak into 22.04 jobs (GLIBC 2.35) and fail with
+          # `version 'GLIBC_2.39' not found`. The `ImageOS` env var
+          # (ubuntu22 / ubuntu24 / etc.) gives us proper isolation.
+          prefix-key: "v0-rust-${{ env.ImageOS }}"
       - name: install Tauri 1.x system deps
         run: |
           sudo apt-get update
@@ -59,6 +67,14 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
+        with:
+          # rust-cache keys on `runner.os` ("Linux") which is shared
+          # between ubuntu-latest (24.04) and ubuntu-22.04. Without a
+          # per-image prefix, build-script binaries cached on 24.04
+          # (GLIBC 2.39) leak into 22.04 jobs (GLIBC 2.35) and fail with
+          # `version 'GLIBC_2.39' not found`. The `ImageOS` env var
+          # (ubuntu22 / ubuntu24 / etc.) gives us proper isolation.
+          prefix-key: "v0-rust-${{ env.ImageOS }}"
       - name: install Tauri 1.x system deps
         run: |
           sudo apt-get update
