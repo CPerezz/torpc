@@ -59,14 +59,24 @@ jobs:
       # Pack the two CLI binaries into the platform-conventional archive.
       # `strip = true` in `[profile.release]` already shrinks them; we just
       # tarball/zip and emit a sibling `.sha256` for each.
+      #
+      # `GITHUB_REF_NAME` for tag pushes is the bare tag (`v0.1.0`); for
+      # workflow_dispatch on a branch it's the branch name (which may
+      # contain `/`, breaking filenames). Derive a safe `version` string:
+      # tags pass through verbatim, everything else gets `dev-<short-sha>`.
       - name: package (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="dev-${GITHUB_SHA:0:8}"
+          fi
           mkdir -p dist
           for bin in torpc torpc-proxy; do
-            archive="${bin}-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+            archive="${bin}-${version}-${{ matrix.target }}.tar.gz"
             tar -C "target/${{ matrix.target }}/release" -czf "dist/${archive}" "${bin}"
             (cd dist && shasum -a 256 "${archive}" > "${archive}.sha256")
           done
@@ -82,9 +92,17 @@ jobs:
           # malformed archives or empty .sha256 sidecars without failing
           # the step. Force `Stop` so any cmdlet error is fatal.
           $ErrorActionPreference = 'Stop'
+          # Same sanitization as the Unix path: tags pass through verbatim,
+          # branches collapse to `dev-<short-sha>` so a slash in the branch
+          # name doesn't get interpreted as a path separator.
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $env:GITHUB_REF_NAME
+          } else {
+            "dev-" + $env:GITHUB_SHA.Substring(0, 8)
+          }
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           foreach ($bin in @("torpc", "torpc-proxy")) {
-            $archive = "${bin}-${env:GITHUB_REF_NAME}-${{ matrix.target }}.zip"
+            $archive = "${bin}-${version}-${{ matrix.target }}.zip"
             $exe = "target/${{ matrix.target }}/release/${bin}.exe"
             Compress-Archive -Path $exe -DestinationPath "dist/${archive}"
             $hash = (Get-FileHash -Algorithm SHA256 "dist/${archive}").Hash.ToLower()
@@ -146,7 +164,11 @@ jobs:
           set -euo pipefail
           shopt -s nullglob
           mkdir -p dist
-          version="${GITHUB_REF_NAME:-dev}"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="dev-${GITHUB_SHA:0:8}"
+          fi
           target="x86_64-unknown-linux-gnu"
           # Tauri's bundler writes to the WORKSPACE target dir
           # (`$GITHUB_WORKSPACE/target/release/bundle/{deb,rpm,appimage}`)
@@ -212,7 +234,11 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist
-          version="${GITHUB_REF_NAME:-dev}"
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="dev-${GITHUB_SHA:0:8}"
+          fi
           # Universal output is at target/universal-apple-darwin/release/bundle/dmg.
           # Use `mapfile` + an explicit count check so we fail loudly
           # instead of silently dropping a second DMG (Tauri sometimes
