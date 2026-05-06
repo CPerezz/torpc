@@ -1,90 +1,60 @@
 {
+  "$schema": "https://schema.tauri.app/config/2",
+  "productName": "ToRPC Proxy",
+  "version": "0.1.0",
+  "identifier": "com.torpc.proxy",
   "build": {
-    "beforeBuildCommand": "",
-    "beforeDevCommand": "",
-    "devPath": "ui",
-    "distDir": "ui",
-    "withGlobalTauri": true
+    "frontendDist": "ui"
   },
-  "package": {
-    "productName": "ToRPC Proxy",
-    "version": "0.1.0"
-  },
-  "tauri": {
-    "allowlist": {
-      "all": false,
-      "shell": {
-        "all": false,
-        "open": true
-      },
-      "window": {
-        "all": false,
-        "close": true,
-        "hide": true,
-        "show": true,
-        "maximize": false,
-        "minimize": true,
-        "unmaximize": false,
-        "unminimize": false,
-        "setFocus": true
-      }
-    },
-    "bundle": {
-      "active": true,
-      "category": "Utility",
-      "copyright": "ToRPC Contributors",
-      "deb": {
-        "depends": []
-      },
-      "externalBin": [],
-      "icon": [
-        "icons/32x32.png",
-        "icons/128x128.png",
-        "icons/128x128@2x.png",
-        "icons/icon.icns",
-        "icons/icon.ico"
-      ],
-      "identifier": "com.torpc.proxy",
-      "longDescription": "A system tray application for managing ToRPC proxy connections through Tor",
-      "macOS": {
-        "entitlements": null,
-        "exceptionDomain": "",
-        "frameworks": [],
-        "providerShortName": null,
-        "signingIdentity": null
-      },
-      "resources": [],
-      "shortDescription": "ToRPC Proxy Manager",
-      "targets": "all",
-      "windows": {
-        "certificateThumbprint": null,
-        "digestAlgorithm": "sha256",
-        "timestampUrl": ""
-      }
-    },
-    "security": {
-      "csp": "default-src 'self'; connect-src 'self' http://localhost:8081 ws://localhost:* wss://localhost:*; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'"
-    },
-    "systemTray": {
-      "iconPath": "icons/icon.png",
-      "iconAsTemplate": true
-    },
-    "updater": {
-      "active": false
-    },
+  "app": {
+    "withGlobalTauri": true,
     "windows": [
       {
-        "fullscreen": false,
-        "height": 700,
-        "resizable": true,
+        "label": "main",
         "title": "ToRPC Proxy Settings",
         "width": 600,
-        "visible": true,
-        "center": true,
+        "height": 700,
         "minWidth": 450,
         "minHeight": 500,
+        "resizable": true,
+        "fullscreen": false,
+        "center": true,
+        "visible": true,
         "maximizable": true
       }
-    ]
+    ],
+    "security": {
+      "csp": "default-src 'self'; script-src 'self' 'unsafe-eval' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; connect-src 'self' ipc: http://ipc.localhost"
+    },
+    "trayIcon": {
+      "id": "main",
+      "iconPath": "icons/icon.png",
+      "iconAsTemplate": true
+    }
+  },
+  "bundle": {
+    "active": true,
+    "category": "Utility",
+    "copyright": "ToRPC Contributors",
+    "shortDescription": "ToRPC Proxy Manager",
+    "longDescription": "A system tray application for managing ToRPC proxy connections through Tor",
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ],
+    "linux": {
+      "deb": {
+        "depends": []
+      }
+    },
+    "macOS": {
+      "frameworks": [],
+      "providerShortName": null,
+      "signingIdentity": null
+    },
+    "targets": "all"
   }
 }

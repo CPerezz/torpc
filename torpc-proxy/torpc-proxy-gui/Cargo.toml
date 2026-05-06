@@ -7,14 +7,17 @@ license.workspace = true
 description = "Desktop GUI for ToRPC proxy using Tauri"
 
 [build-dependencies]
-tauri-build = { version = "1", features = [] }
+tauri-build = { version = "2", features = [] }
 
 [dependencies]
 # Core library
 torpc-proxy-core = { path = "../torpc-proxy-core" }
 
-# Tauri
-tauri = { version = "1", features = ["shell-open", "system-tray", "window-close", "window-hide", "window-minimize", "window-set-focus", "window-show"] }
+# Tauri 2.x — most features that were behind feature flags in 1.x are now
+# either built-in (window/tray APIs) or split into separate plugin crates.
+# `tauri-plugin-shell` will be added in PR 3 when we wire the update-
+# notification "open releases page" action.
+tauri = { version = "2", features = ["tray-icon"] }
 
 # Async runtime
 tokio = { workspace = true }
@@ -29,6 +32,7 @@ tracing-subscriber = { workspace = true }
 # Serialization
 serde = { workspace = true }
 serde_json = { workspace = true }
+toml = { workspace = true }
 
 # Tor support for connection testing
 tokio-socks = { workspace = true }
@@ -37,5 +41,6 @@ tokio-socks = { workspace = true }
 dirs = "5.0"
 
 [features]
-# This feature is used for production builds or when `devPath` points to the filesystem
+# This feature is used for production builds or when `frontendDist` points
+# to the filesystem (Tauri 2.x renamed `devPath`/`distDir`).
 custom-protocol = ["tauri/custom-protocol"]

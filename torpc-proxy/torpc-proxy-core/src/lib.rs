@@ -10,8 +10,18 @@ use tracing::{error, info};
 pub use config::Config;
 pub use proxy::{ProxyConfig, TorRpcProxy};
 
-/// Status of the proxy
-#[derive(Debug, Clone, PartialEq)]
+/// Status of the proxy.
+///
+/// Serializes to a tagged JSON shape so the GUI can pattern-match without
+/// regexing against `Debug` output. Examples:
+///
+/// ```json
+/// { "state": "Stopped" }
+/// { "state": "Running" }
+/// { "state": "Error", "message": "Tor not reachable" }
+/// ```
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(tag = "state", content = "message")]
 pub enum ProxyStatus {
     Stopped,
     Starting,

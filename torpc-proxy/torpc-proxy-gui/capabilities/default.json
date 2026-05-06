@@ -1,0 +1,12 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "default",
+  "description": "Default capability for the settings window: window management, tray-icon access, and permission to call our custom tauri::commands.",
+  "windows": ["main"],
+  "permissions": [
+    "core:default",
+    "core:tray:default",
+    "core:window:default",
+    "core:webview:default"
+  ]
+}

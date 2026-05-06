@@ -28,6 +28,9 @@ anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
+# Platform-specific config-dir resolution (matches the GUI's path).
+dirs = "5.0"
+
 # System integration
 [target.'cfg(unix)'.dependencies]
 daemonize = "0.5"
