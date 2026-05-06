@@ -1,38 +1,38 @@
 name: Release
 
+# Triggered automatically by tag pushes (`v0.1.0`, `v0.1.0-rc1`, etc.) or
+# manually via "Run workflow" for build-only dry-runs that exercise every
+# matrix leg without creating a real GitHub release.
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
+  workflow_dispatch:
 
-# Need write access to create the release and upload assets.
 permissions:
-  contents: write
+  contents: write       # creating the release + uploading assets
+  id-token: write       # sigstore attestation OIDC token
+  attestations: write   # actions/attest-build-provenance API
 
 jobs:
-  build:
-    name: build (${{ matrix.target }})
+  # -------------------------------------------------------------------------
+  # CLI binaries — `torpc` (daemon) + `torpc-proxy` (client).
+  # Four targets, the same set as before. No GUI here; that's its own job.
+  # -------------------------------------------------------------------------
+  build-cli:
+    name: cli (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            archive_ext: tar.gz
-          # macOS Intel
           - os: macos-13
             target: x86_64-apple-darwin
-            archive_ext: tar.gz
-          # macOS Apple Silicon
           - os: macos-latest
             target: aarch64-apple-darwin
-            archive_ext: tar.gz
-          # Windows x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive_ext: zip
 
     steps:
       - uses: actions/checkout@v4
@@ -43,20 +43,17 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          prefix-key: "v0-rust-${{ env.ImageOS }}"
+          key: cli-${{ matrix.target }}
 
-      # Build the daemon and the CLI client. The Tauri GUI is intentionally
-      # excluded from the release for now — bundling needs platform-specific
-      # post-build steps (DMG, AppImage, MSI) that we'll add when there's
-      # demand. Source build of the GUI is documented in the README.
       - name: build daemon + CLI client
         run: |
           cargo build --release --target ${{ matrix.target }} --bin torpc
           cargo build --release --target ${{ matrix.target }} --bin torpc-proxy
 
-      # Pack each binary into the platform-conventional archive. macOS and
-      # Linux get tar.gz; Windows gets zip. Strip is implicit via the
-      # workspace [profile.release] `strip = true` setting.
+      # Pack the two CLI binaries into the platform-conventional archive.
+      # `strip = true` in `[profile.release]` already shrinks them; we just
+      # tarball/zip and emit a sibling `.sha256` for each.
       - name: package (Unix)
         if: runner.os != 'Windows'
         shell: bash
@@ -84,16 +81,134 @@ jobs:
           }
           Get-ChildItem dist
 
-      - name: upload artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.target }}
+          name: cli-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
+  # -------------------------------------------------------------------------
+  # GUI bundle — Linux. Tauri's bundler produces .deb + .rpm + .AppImage in
+  # one pass via `cargo tauri build`. Renamed to a stable
+  # `torpc-proxy-gui-<version>-<target>.<ext>` scheme before upload so the
+  # release-page asset list reads cleanly.
+  # -------------------------------------------------------------------------
+  build-gui-linux:
+    name: gui (x86_64-unknown-linux-gnu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0-rust-${{ env.ImageOS }}"
+          key: gui-linux
+
+      - name: install Tauri 2.x system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      # `cargo install tauri-cli` from source takes ~3 min; the rust-cache
+      # picks it up from ~/.cargo/bin on subsequent runs. There's a
+      # precompiled binary on GitHub releases but the install path is
+      # less battle-tested across platforms; trade speed for reliability
+      # on a workflow that fires only on tag pushes.
+      - name: install tauri-cli
+        run: cargo install --locked --version "^2.0" tauri-cli
+
+      - name: build GUI bundles
+        working-directory: torpc-proxy/torpc-proxy-gui
+        run: cargo tauri build
+
+      - name: collect + rename bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          version="${GITHUB_REF_NAME:-dev}"
+          target="x86_64-unknown-linux-gnu"
+          # Tauri lays bundles under target/release/bundle/{deb,rpm,appimage}.
+          while IFS= read -r f; do
+            ext="${f##*.}"
+            cp "$f" "dist/torpc-proxy-gui-${version}-${target}.${ext}"
+          done < <(find target/release/bundle -type f \
+                   \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \))
+          (cd dist && for f in *.deb *.rpm *.AppImage; do
+            shasum -a 256 "$f" > "$f.sha256"
+          done)
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-linux-x86_64-unknown-linux-gnu
+          path: dist/*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # GUI bundle — macOS universal binary. `cargo tauri build --target
+  # universal-apple-darwin` builds for x86_64 + aarch64 and lipo's them
+  # together into a single `.app` + `.dmg`. We need both architectures'
+  # rustc targets installed for that to work.
+  # -------------------------------------------------------------------------
+  build-gui-darwin:
+    name: gui (universal-apple-darwin)
+    runs-on: macos-13
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0-rust-${{ env.ImageOS }}"
+          key: gui-darwin
+
+      - name: install tauri-cli
+        run: cargo install --locked --version "^2.0" tauri-cli
+
+      - name: build universal GUI bundle
+        working-directory: torpc-proxy/torpc-proxy-gui
+        run: cargo tauri build --target universal-apple-darwin
+
+      - name: collect + rename DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          version="${GITHUB_REF_NAME:-dev}"
+          # Universal output is at target/universal-apple-darwin/release/bundle/dmg.
+          dmg=$(find target/universal-apple-darwin/release/bundle/dmg -name "*.dmg" | head -1)
+          cp "$dmg" "dist/torpc-proxy-gui-${version}-universal-apple-darwin.dmg"
+          (cd dist && shasum -a 256 *.dmg > "torpc-proxy-gui-${version}-universal-apple-darwin.dmg.sha256")
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-darwin-universal
+          path: dist/*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # Release. Aggregates all build artifacts, generates one combined
+  # SHA256SUMS file, attests build provenance via sigstore, and publishes
+  # to GitHub Releases — but only on real tag pushes. Manual workflow
+  # dispatches stop after artifact aggregation so the run summary is the
+  # download surface for dry-run testing.
+  # -------------------------------------------------------------------------
   release:
     name: publish release
-    needs: build
+    needs: [build-cli, build-gui-linux, build-gui-darwin]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -104,15 +219,56 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: list collected artifacts
-        run: ls -la dist/
+      # One aggregate SHA256SUMS file makes `sha256sum -c SHA256SUMS` a
+      # single command for downstream verification, instead of asking
+      # users to grab one .sha256 per asset.
+      - name: aggregate SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          # Hash only the real artifacts; skip per-file .sha256 sidecars.
+          shopt -s nullglob
+          shasum -a 256 *.tar.gz *.zip *.dmg *.AppImage *.deb *.rpm 2>/dev/null \
+            | tee SHA256SUMS
+          ls -la
 
-      # Use the tag annotation as the release body if present, else fall back
-      # to a generic message. softprops/action-gh-release auto-generates a
-      # release on the corresponding tag.
+      # Sigstore-backed build provenance. `gh attestation verify <file>
+      # --owner CPerezz` lets anyone independently confirm the binary
+      # came from this repo + this CI run, without trusting GitHub's
+      # word for it.
+      - name: attest build provenance
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@v2
+        with:
+          subject-path: |
+            dist/*.tar.gz
+            dist/*.zip
+            dist/*.dmg
+            dist/*.AppImage
+            dist/*.deb
+            dist/*.rpm
+
+      # Tag pushes only. Pre-release detection: tags with a `-` (e.g.
+      # `v0.1.0-rc1`, `v0.2.0-beta.3`) are marked as prerelease in the
+      # GitHub release UI; clean `v0.1.0` is stable.
       - name: publish release
+        if: github.event_name == 'push'
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
           generate_release_notes: true
           fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref, '-') }}
+
+      # When triggered manually (workflow_dispatch), surface a heads-up
+      # so the run summary makes the build-only intent obvious.
+      - name: dry-run summary
+        if: github.event_name != 'push'
+        run: |
+          echo "## Dry-run build complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Triggered manually via workflow_dispatch — no GitHub release created." >> $GITHUB_STEP_SUMMARY
+          echo "Artifacts are attached to this run for ~90 days; download from the run summary above." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To publish for real, push a tag like \`v0.1.0\` (stable) or \`v0.1.0-rc1\` (pre-release)." >> $GITHUB_STEP_SUMMARY
