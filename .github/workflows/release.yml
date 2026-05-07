@@ -1,38 +1,42 @@
 name: Release
 
+# Triggered automatically by tag pushes (`v0.1.0`, `v0.1.0-rc1`, etc.) or
+# manually via "Run workflow" for build-only dry-runs that exercise every
+# matrix leg without creating a real GitHub release.
 on:
   push:
-    tags:
-      - 'v*'
+    tags: ['v*']
+  workflow_dispatch:
 
-# Need write access to create the release and upload assets.
 permissions:
-  contents: write
+  contents: write       # creating the release + uploading assets
+  id-token: write       # sigstore attestation OIDC token
+  attestations: write   # actions/attest-build-provenance API
 
 jobs:
-  build:
-    name: build (${{ matrix.target }})
+  # -------------------------------------------------------------------------
+  # CLI binaries — `torpc` (daemon) + `torpc-proxy` (client).
+  # Four targets, the same set as before. No GUI here; that's its own job.
+  # -------------------------------------------------------------------------
+  build-cli:
+    name: cli (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          # Linux x86_64
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
-            archive_ext: tar.gz
-          # macOS Intel
-          - os: macos-13
+          # Both macOS legs run on Apple Silicon (`macos-latest`). The
+          # x86_64 build cross-compiles via the rustc target installed
+          # by `dtolnay/rust-toolchain`. macos-13 (Intel) runners are
+          # queue-capacity-limited as GitHub winds them down.
+          - os: macos-latest
             target: x86_64-apple-darwin
-            archive_ext: tar.gz
-          # macOS Apple Silicon
           - os: macos-latest
             target: aarch64-apple-darwin
-            archive_ext: tar.gz
-          # Windows x86_64
           - os: windows-latest
             target: x86_64-pc-windows-msvc
-            archive_ext: zip
 
     steps:
       - uses: actions/checkout@v4
@@ -43,28 +47,40 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          prefix-key: "v0-rust-${{ env.ImageOS }}"
+          key: cli-${{ matrix.target }}
 
-      # Build the daemon and the CLI client. The Tauri GUI is intentionally
-      # excluded from the release for now — bundling needs platform-specific
-      # post-build steps (DMG, AppImage, MSI) that we'll add when there's
-      # demand. Source build of the GUI is documented in the README.
       - name: build daemon + CLI client
+        # `--bin torpc-proxy` doesn't resolve from the workspace root because
+        # the binary is defined in the `torpc-proxy-cli` package — Cargo's
+        # `--bin` flag searches default-run packages first and bails before
+        # finding it. Use `-p torpc-proxy-cli` to scope; `torpc` is the root
+        # package's default and works with `--bin torpc`.
         run: |
           cargo build --release --target ${{ matrix.target }} --bin torpc
-          cargo build --release --target ${{ matrix.target }} --bin torpc-proxy
+          cargo build --release --target ${{ matrix.target }} -p torpc-proxy-cli
 
-      # Pack each binary into the platform-conventional archive. macOS and
-      # Linux get tar.gz; Windows gets zip. Strip is implicit via the
-      # workspace [profile.release] `strip = true` setting.
+      # Pack the two CLI binaries into the platform-conventional archive.
+      # `strip = true` in `[profile.release]` already shrinks them; we just
+      # tarball/zip and emit a sibling `.sha256` for each.
+      #
+      # `GITHUB_REF_NAME` for tag pushes is the bare tag (`v0.1.0`); for
+      # workflow_dispatch on a branch it's the branch name (which may
+      # contain `/`, breaking filenames). Derive a safe `version` string:
+      # tags pass through verbatim, everything else gets `dev-<short-sha>`.
       - name: package (Unix)
         if: runner.os != 'Windows'
         shell: bash
         run: |
           set -euo pipefail
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="dev-${GITHUB_SHA:0:8}"
+          fi
           mkdir -p dist
           for bin in torpc torpc-proxy; do
-            archive="${bin}-${GITHUB_REF_NAME}-${{ matrix.target }}.tar.gz"
+            archive="${bin}-${version}-${{ matrix.target }}.tar.gz"
             tar -C "target/${{ matrix.target }}/release" -czf "dist/${archive}" "${bin}"
             (cd dist && shasum -a 256 "${archive}" > "${archive}.sha256")
           done
@@ -74,9 +90,23 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
+          # `pwsh` on GitHub runners defaults `$ErrorActionPreference` to
+          # `Continue`, which lets non-terminating errors from cmdlets like
+          # Compress-Archive / Get-FileHash slip through and produce
+          # malformed archives or empty .sha256 sidecars without failing
+          # the step. Force `Stop` so any cmdlet error is fatal.
+          $ErrorActionPreference = 'Stop'
+          # Same sanitization as the Unix path: tags pass through verbatim,
+          # branches collapse to `dev-<short-sha>` so a slash in the branch
+          # name doesn't get interpreted as a path separator.
+          $version = if ($env:GITHUB_REF_TYPE -eq 'tag') {
+            $env:GITHUB_REF_NAME
+          } else {
+            "dev-" + $env:GITHUB_SHA.Substring(0, 8)
+          }
           New-Item -ItemType Directory -Force -Path dist | Out-Null
           foreach ($bin in @("torpc", "torpc-proxy")) {
-            $archive = "${bin}-${env:GITHUB_REF_NAME}-${{ matrix.target }}.zip"
+            $archive = "${bin}-${version}-${{ matrix.target }}.zip"
             $exe = "target/${{ matrix.target }}/release/${bin}.exe"
             Compress-Archive -Path $exe -DestinationPath "dist/${archive}"
             $hash = (Get-FileHash -Algorithm SHA256 "dist/${archive}").Hash.ToLower()
@@ -84,16 +114,176 @@ jobs:
           }
           Get-ChildItem dist
 
-      - name: upload artifacts
-        uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v4
         with:
-          name: dist-${{ matrix.target }}
+          name: cli-${{ matrix.target }}
           path: dist/*
           if-no-files-found: error
 
+  # -------------------------------------------------------------------------
+  # GUI bundle — Linux. Tauri's bundler produces .deb + .rpm + .AppImage in
+  # one pass via `cargo tauri build`. Renamed to a stable
+  # `torpc-proxy-gui-<version>-<target>.<ext>` scheme before upload so the
+  # release-page asset list reads cleanly.
+  # -------------------------------------------------------------------------
+  build-gui-linux:
+    name: gui (x86_64-unknown-linux-gnu)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0-rust-${{ env.ImageOS }}"
+          key: gui-linux
+
+      - name: install Tauri 2.x system deps
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libgtk-3-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libsoup-3.0-dev \
+            libjavascriptcoregtk-4.1-dev
+
+      # `cargo install tauri-cli` from source takes ~3 min; the rust-cache
+      # picks it up from ~/.cargo/bin on subsequent runs. There's a
+      # precompiled binary on GitHub releases but the install path is
+      # less battle-tested across platforms; trade speed for reliability
+      # on a workflow that fires only on tag pushes.
+      - name: install tauri-cli
+        run: cargo install --locked --version "^2.0" tauri-cli
+
+      - name: build GUI bundles
+        working-directory: torpc-proxy/torpc-proxy-gui
+        run: cargo tauri build
+
+      - name: collect + rename bundles
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          mkdir -p dist
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="dev-${GITHUB_SHA:0:8}"
+          fi
+          target="x86_64-unknown-linux-gnu"
+          # Tauri's bundler writes to the WORKSPACE target dir
+          # (`$GITHUB_WORKSPACE/target/release/bundle/{deb,rpm,appimage}`)
+          # because `torpc-proxy-gui` is a workspace member. If the GUI
+          # ever moves to its own workspace or sets a per-crate `target-dir`,
+          # this find root needs to follow.
+          mapfile -t bundles < <(find target/release/bundle -type f \
+                   \( -name "*.deb" -o -name "*.rpm" -o -name "*.AppImage" \))
+          if [[ ${#bundles[@]} -eq 0 ]]; then
+            echo "No GUI bundles produced under target/release/bundle." >&2
+            echo "Tauri's bundler emitted nothing — check the build step above." >&2
+            exit 1
+          fi
+          for f in "${bundles[@]}"; do
+            ext="${f##*.}"
+            cp "$f" "dist/torpc-proxy-gui-${version}-${target}.${ext}"
+          done
+          # `shopt -s nullglob` makes the for-loop expand to nothing rather
+          # than to literal patterns when an extension is missing — the
+          # bundles[@] count check above already guards against zero, so
+          # this just keeps the loop safe per-extension.
+          (cd dist && for f in *.deb *.rpm *.AppImage; do
+            shasum -a 256 "$f" > "$f.sha256"
+          done)
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-linux-x86_64-unknown-linux-gnu
+          path: dist/*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # GUI bundle — macOS universal binary. `cargo tauri build --target
+  # universal-apple-darwin` builds for x86_64 + aarch64 and lipo's them
+  # together into a single `.app` + `.dmg`. We need both architectures'
+  # rustc targets installed for that to work.
+  # -------------------------------------------------------------------------
+  build-gui-darwin:
+    name: gui (universal-apple-darwin)
+    # Apple Silicon runner. Both rustc targets (x86_64 + aarch64) are
+    # installed below; Tauri's `--target universal-apple-darwin` does
+    # the lipo dance. macos-13 (Intel) is being phased out and was
+    # spending 20+ minutes in the runner queue.
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-apple-darwin,aarch64-apple-darwin
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          prefix-key: "v0-rust-${{ env.ImageOS }}"
+          key: gui-darwin
+
+      - name: install tauri-cli
+        run: cargo install --locked --version "^2.0" tauri-cli
+
+      - name: build universal GUI bundle
+        working-directory: torpc-proxy/torpc-proxy-gui
+        run: cargo tauri build --target universal-apple-darwin
+
+      - name: collect + rename DMG
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          if [[ "$GITHUB_REF_TYPE" == "tag" ]]; then
+            version="$GITHUB_REF_NAME"
+          else
+            version="dev-${GITHUB_SHA:0:8}"
+          fi
+          # Universal output is at target/universal-apple-darwin/release/bundle/dmg.
+          # Use a portable while-read loop instead of `mapfile` — macOS
+          # ships bash 3.2 by default, which predates `mapfile` (bash 4+).
+          # The explicit count check still catches "no DMGs" and "multiple
+          # DMGs" (Tauri sometimes produces a sidecar updater DMG when
+          # configured) before we'd silently drop one.
+          dmgs=()
+          while IFS= read -r line; do
+            dmgs+=("$line")
+          done < <(find target/universal-apple-darwin/release/bundle/dmg -name "*.dmg")
+          if [[ ${#dmgs[@]} -ne 1 ]]; then
+            echo "Expected exactly 1 DMG, found ${#dmgs[@]}: ${dmgs[*]:-<none>}" >&2
+            exit 1
+          fi
+          renamed="dist/torpc-proxy-gui-${version}-universal-apple-darwin.dmg"
+          cp "${dmgs[0]}" "$renamed"
+          # Hash the renamed file by its specific path — `*.dmg` would have
+          # (incorrectly) hashed every match if the count check ever loosens.
+          (cd dist && shasum -a 256 "$(basename "$renamed")" > "$(basename "$renamed").sha256")
+          ls -la dist/
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: gui-darwin-universal
+          path: dist/*
+          if-no-files-found: error
+
+  # -------------------------------------------------------------------------
+  # Release. Aggregates all build artifacts, generates one combined
+  # SHA256SUMS file, attests build provenance via sigstore, and publishes
+  # to GitHub Releases — but only on real tag pushes. Manual workflow
+  # dispatches stop after artifact aggregation so the run summary is the
+  # download surface for dry-run testing.
+  # -------------------------------------------------------------------------
   release:
     name: publish release
-    needs: build
+    needs: [build-cli, build-gui-linux, build-gui-darwin]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -104,15 +294,78 @@ jobs:
           path: dist
           merge-multiple: true
 
-      - name: list collected artifacts
-        run: ls -la dist/
+      # One aggregate SHA256SUMS file makes `sha256sum -c SHA256SUMS` a
+      # single command for downstream verification, instead of asking
+      # users to grab one .sha256 per asset.
+      #
+      # `nullglob` makes missing extensions expand to nothing (rather than
+      # the literal pattern, which `shasum` would reject). The post-write
+      # `[[ -s ]]` assertion catches the worst-case "every glob expanded
+      # to empty → SHA256SUMS is zero bytes → release ships unchecksummed
+      # binaries" path. We deliberately don't `2>/dev/null` so any real
+      # I/O failure surfaces.
+      - name: aggregate SHA256SUMS
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          shopt -s nullglob
+          artifacts=( *.tar.gz *.zip *.dmg *.AppImage *.deb *.rpm )
+          if [[ ${#artifacts[@]} -eq 0 ]]; then
+            echo "No artifacts found in dist/ — every build leg produced nothing." >&2
+            ls -la
+            exit 1
+          fi
+          shasum -a 256 "${artifacts[@]}" | tee SHA256SUMS
+          [[ -s SHA256SUMS ]] || { echo "SHA256SUMS is empty"; exit 1; }
+          ls -la
 
-      # Use the tag annotation as the release body if present, else fall back
-      # to a generic message. softprops/action-gh-release auto-generates a
-      # release on the corresponding tag.
+      # The per-file `.sha256` sidecars from each build leg are now
+      # redundant alongside the aggregate `SHA256SUMS`. Pruning them keeps
+      # the GitHub release page from listing two parallel verification
+      # surfaces (and stops them from being signed by attest-build-
+      # provenance below, which only signs the canonical artifacts).
+      - name: prune redundant per-file .sha256 sidecars
+        run: rm -f dist/*.sha256
+
+      # Sigstore-backed build provenance. `gh attestation verify <file>
+      # --owner CPerezz` lets anyone independently confirm the binary
+      # came from this repo + this CI run, without trusting GitHub's
+      # word for it.
+      - name: attest build provenance
+        if: github.event_name == 'push'
+        uses: actions/attest-build-provenance@v2
+        with:
+          # Single brace-expanded glob — if a particular extension has
+          # zero matches, the action treats the missing pattern less
+          # forgivingly than multiple separate patterns. This expands
+          # client-side via the shell that interprets the input.
+          subject-path: dist/*
+
+      # Tag pushes only. Pre-release detection: tag refs with a `-` (e.g.
+      # `v0.1.0-rc1`, `v0.2.0-beta.3`) get the `prerelease` flag; clean
+      # `v0.1.0` is stable. `github.ref_name` is the unprefixed tag name
+      # (vs `github.ref` which is `refs/tags/v0.1.0`); using `_name` keeps
+      # the substring check tightly scoped to the tag itself. The `if:`
+      # gate above guarantees this only runs on tag pushes, so this
+      # expression is never evaluated against a branch ref.
       - name: publish release
+        if: github.event_name == 'push' && success()
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*
           generate_release_notes: true
           fail_on_unmatched_files: true
+          prerelease: ${{ contains(github.ref_name, '-') }}
+
+      # When triggered manually (workflow_dispatch), surface a heads-up
+      # so the run summary makes the build-only intent obvious.
+      - name: dry-run summary
+        if: github.event_name != 'push'
+        run: |
+          echo "## Dry-run build complete" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Triggered manually via workflow_dispatch — no GitHub release created." >> $GITHUB_STEP_SUMMARY
+          echo "Artifacts are attached to this run for ~90 days; download from the run summary above." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "To publish for real, push a tag like \`v0.1.0\` (stable) or \`v0.1.0-rc1\` (pre-release)." >> $GITHUB_STEP_SUMMARY
